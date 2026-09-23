@@ -1,0 +1,22 @@
+{
+  "name": "@ui-intelligence/cli",
+  "version": "1.0.0",
+  "description": "CLI: initialization, scan planning, execution, capture, export",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/capture": "1.0.0"
+  },
+  "bin": {
+    "ui-intel": "./dist/cli.js"
+  }
+}

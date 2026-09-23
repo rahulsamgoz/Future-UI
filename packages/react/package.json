@@ -1,0 +1,24 @@
+{
+  "name": "@ui-intelligence/react",
+  "version": "1.0.0",
+  "description": "React semantic boundaries, instance registry, selection, state transfer, renderer lifecycle",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/runtime-core": "1.0.0",
+    "@ui-intelligence/preferences": "1.0.0",
+    "react": "^18.3.1"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0"
+  }
+}

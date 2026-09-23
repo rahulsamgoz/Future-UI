@@ -1,0 +1,19 @@
+{
+  "name": "@ui-intelligence/capture",
+  "version": "1.0.0",
+  "description": "Scenario execution, redaction, artifacts, evidence manifests",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "playwright": "^1.47.0"
+  }
+}

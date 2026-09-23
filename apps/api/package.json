@@ -1,0 +1,22 @@
+{
+  "name": "@ui-intelligence/api",
+  "version": "1.0.0",
+  "description": "Project API service: authorization, projects, captures, retrieval, proposals",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/indexing": "1.0.0",
+    "@ui-intelligence/agent": "1.0.0",
+    "fastify": "^4.28.1",
+    "better-sqlite3": "^11.3.0"
+  }
+}

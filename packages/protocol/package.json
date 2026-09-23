@@ -1,0 +1,21 @@
+{
+  "name": "@ui-intelligence/protocol",
+  "version": "1.0.0",
+  "description": "Versioned schemas, identifiers, errors, and adapter declarations for UI Intelligence",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2"
+  }
+}

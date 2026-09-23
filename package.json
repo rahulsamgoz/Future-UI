@@ -1,0 +1,33 @@
+{
+  "name": "ui-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "UI Intelligence R1: personalizable UI with runtime contracts, history capture, and validated proposals",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b tsconfig.json --pretty false",
+    "dev:reference-app": "npm run dev -w @ui-intelligence/reference-app",
+    "dev:api": "npm run dev -w @ui-intelligence/api",
+    "dev:studio": "npm run dev -w @ui-intelligence/studio",
+    "fixture:history": "node fixtures/history/generate.mjs"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.0.0",
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}

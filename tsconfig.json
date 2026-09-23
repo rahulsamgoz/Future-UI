@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/runtime-core" },
+    { "path": "packages/preferences" },
+    { "path": "packages/react" },
+    { "path": "packages/renderers" },
+    { "path": "packages/vite" },
+    { "path": "packages/capture" },
+    { "path": "packages/indexing" },
+    { "path": "packages/agent" },
+    { "path": "packages/cli" },
+    { "path": "apps/api" },
+    { "path": "apps/index-worker" },
+    { "path": "apps/capture-runner" },
+    { "path": "apps/studio" },
+    { "path": "apps/reference-app" }
+  ]
+}

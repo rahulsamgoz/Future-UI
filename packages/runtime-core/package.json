@@ -1,0 +1,19 @@
+{
+  "name": "@ui-intelligence/runtime-core",
+  "version": "1.0.0",
+  "description": "Framework-neutral target registry, scope planner, proposal validation, operation coordination",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "zod": "^3.23.8"
+  }
+}

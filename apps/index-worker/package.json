@@ -1,0 +1,20 @@
+{
+  "name": "@ui-intelligence/index-worker",
+  "version": "1.0.0",
+  "description": "Leased indexing/retrieval jobs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/indexing": "1.0.0",
+    "better-sqlite3": "^11.3.0"
+  }
+}

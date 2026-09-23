@@ -1,0 +1,22 @@
+{
+  "name": "@ui-intelligence/renderers",
+  "version": "1.0.0",
+  "description": "Approved presentations, page layouts, schema definitions, preview stubs",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "react": "^18.3.1"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0"
+  }
+}
