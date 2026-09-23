@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { JsonValue, LayoutNode } from "@ui-intelligence/protocol";
+import { useCallback, useEffect, useState } from "react";
+import type { JsonValue, LayoutNode, StateAdapter } from "@ui-intelligence/protocol";
 import { useSelection } from "@ui-intelligence/react";
 import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
 import { createControlledDataProvider, createStubActionBindings } from "@ui-intelligence/renderers";
-import type { StateAdapter } from "@ui-intelligence/protocol";
 import { useAppServices } from "../Services.js";
-import { LocalGenerator, type LocalCandidate } from "./LocalGenerator.js";
+import { digestOf } from "@ui-intelligence/protocol";
+import { type LocalCandidate, validatedCandidate } from "./LocalGenerator.js";
 import { appRendererMap } from "../kernel.js";
 
 type Tab = "select" | "candidates" | "batch" | "page" | "history";
@@ -29,10 +29,6 @@ export function Editor() {
   const [status, setStatus] = useState<string | null>(null);
   const [lastApplicationId, setLastApplicationId] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ captureId: string; evidenceLabel: string; commitSha: string; capturedAt: string; summary: string } | string> | null>(null);
-  const selectModeRef = useRef(selectMode);
-  selectModeRef.current = selectMode;
-
-  const renderers = useMemo(() => appRendererMap(), []);
 
   // Selection mode: intercept clicks at capture phase; never trigger app actions.
   useEffect(() => {
@@ -110,6 +106,9 @@ export function Editor() {
         properties: candidate.properties,
         digest: candidate.digest,
         requiredRendererVersions: candidate.requiredRendererVersions,
+        contractVersion: candidate.contractVersion,
+        dataBindingId: candidate.dataBindingId,
+        actionIds: candidate.actionIds,
       },
       switcherFor(selected),
       readSet
@@ -155,17 +154,17 @@ export function Editor() {
     for (const instance of batchTargets) {
       const contract = instance.contract;
       if (!contract.allowedRepresentations.includes("button.compact@1")) continue;
-      const descriptor = kernel.renderers.get("button.compact@1");
-      const candidate: LocalCandidate = {
-        candidateId: `batch_${instance.runtimeInstanceId}`,
-        representation: "button.compact@1",
-        properties: { variant: "compact" },
-        originKind: "generated",
-        summary: "Compact button variant",
-        validation: null as never,
-        digest: `digest-${instance.runtimeInstanceId}-compact`,
-        requiredRendererVersions: descriptor ? { "button.compact@1": descriptor.version } : {},
-      };
+      // The batch path goes through the SAME validation and content digest
+      // as generated candidates — never bypass the validator.
+      const candidate = await validatedCandidate(
+        kernel,
+        instance,
+        "button.compact@1",
+        { variant: "compact" },
+        "generated",
+        "Compact button variant"
+      );
+      if (!candidate) continue;
       const instanceKey = instanceKeyOf(instance);
       const scopeKey = instanceKey ? `${contract.entityKey}#${instanceKey}` : contract.entityKey;
       participants.push({
@@ -195,24 +194,30 @@ export function Editor() {
   const [previewLayout, setPreviewLayout] = useState<LayoutNode | null>(null);
 
   async function generateLayouts() {
-    const pageContract = pageKey === "account" ? (await import("../contracts.js")).accountPageContract : (await import("../contracts.js")).catalogPageContract;
-    const entityContracts = new Map(
-      (await import("../contracts.js")).allEntityContracts.map((c) => [c.entityKey, c])
-    );
+    const contracts = await import("../contracts.js");
+    const pageContract =
+      pageKey === "account" ? contracts.accountPageContract : contracts.catalogPageContract;
+    const entityContracts = new Map(contracts.allEntityContracts.map((c) => [c.entityKey, c]));
     const currentLayout: LayoutNode = previewLayout ?? defaultLayoutFor(pageKey);
     const result = await generator.layoutCandidatesFor(pageContract, entityContracts, currentLayout, 3);
     setLayoutCandidates(result.filter((r) => r.validation.passed));
   }
 
   async function acceptLayout(layout: LayoutNode) {
+    // Digest covers the ENTIRE layout tree (canonical JSON), not just the
+    // root type — structurally different layouts must not share a digest.
+    const layoutDigest = await digestOf(layout);
     const result = await preferences.apply(
       `page:${pageKey}`,
       `page:${pageKey}`,
       {
         representation: "layout",
         properties: { layout } as unknown as Record<string, JsonValue>,
-        digest: `layout-${pageKey}-${layout.kind === "layout" ? layout.type : "root"}-${JSON.stringify(layout.kind === "layout" ? layout.properties : {})}`,
+        digest: `layout-${pageKey}-${layoutDigest}`,
         requiredRendererVersions: { [layout.kind === "layout" ? layout.type : "region"]: 1 },
+        contractVersion: 1,
+        dataBindingId: "",
+        actionIds: [],
       },
       {
         canSwitch: () => ({ allowed: true }),
@@ -324,7 +329,6 @@ export function Editor() {
                   <button className="btn primary" onClick={() => void generateFor(selected)} disabled={generating} data-testid="generate">
                     {generating ? "Generating…" : "Show alternatives"}
                   </button>
-                  <button className="btn" onClick={() => void generateLayouts()} hidden />
                   <ul className="candidate-list">
                     {candidates.map((c) => (
                       <li key={c.candidateId} className="candidate" data-testid="candidate">
@@ -516,4 +520,3 @@ function defaultLayoutFor(pageKey: string): LayoutNode {
   };
 }
 
-export type { RuntimeInstanceInfo, JsonValue };

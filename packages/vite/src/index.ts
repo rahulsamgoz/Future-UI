@@ -102,7 +102,12 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-/** Build identity: commit + hash of the vite config identity + resolved entry files. */
+/** Build identity: hash of the vite config identity + resolved entry files.
+ *
+ * The PUBLIC buildId never contains the commit SHA or a prefix of it — the
+ * raw commit stays in the private manifest only. The public id is derived
+ * from a one-way hash so it still changes when the commit changes.
+ */
 export function computeBuildId(args: {
   commitSha: string;
   configFile: string | undefined;
@@ -115,7 +120,7 @@ export function computeBuildId(args: {
       inputs: args.inputs ?? null,
     })
   );
-  return `${args.commitSha === "unknown" ? "unknown" : args.commitSha.slice(0, 12)}-${identity.slice(0, 16)}`;
+  return args.commitSha === "unknown" ? `unknown-${identity.slice(0, 16)}` : identity.slice(0, 28);
 }
 
 async function hashFileContent(rootDir: string, sourceFile: string | undefined, entityKey: string): Promise<string> {

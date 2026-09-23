@@ -156,7 +156,3 @@ export const allEntityContracts: EntityContract[] = [
   transactionListContract,
   buttonContract,
 ];
-
-export function contractByKey(key: string): EntityContract | undefined {
-  return allEntityContracts.find((c) => c.entityKey === key);
-}

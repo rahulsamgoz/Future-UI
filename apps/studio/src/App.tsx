@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { ApiClient, type ProjectSummary } from "./api.js";
 import { OverviewPage } from "./pages/Overview.js";
 import { HistoryConsole } from "./pages/HistoryConsole.js";
@@ -67,6 +66,3 @@ export function App({ client = new ApiClient() }: { client?: ApiClient }) {
   );
 }
 
-export function mountStudio(element: Element): void {
-  createRoot(element).render(<App />);
-}

@@ -93,7 +93,18 @@ export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Pr
         "INSERT OR IGNORE INTO commits (sha, project_id, committed_at, parents_json) VALUES (?, ?, ?, ?)"
       ).run(manifest.spec.commitSha, projectId, capturedAt, JSON.stringify(manifest.gitParents));
 
-      // Capture row.
+      // Capture row. A captureId owned by another project is a collision,
+      // not data to overwrite.
+      const existingCapture = db
+        .prepare("SELECT project_id FROM captures WHERE id = ?")
+        .get(manifest.captureId) as { project_id: string } | undefined;
+      if (existingCapture && existingCapture.project_id !== projectId) {
+        throw new UiIntelligenceError(
+          "SCHEMA_INVALID",
+          `captureId ${manifest.captureId} already exists in another project`,
+          { httpStatus: 409 }
+        );
+      }
       db.prepare(
         "INSERT INTO captures (id, project_id, build_id, scenario_id, commit_sha, evidence_label, manifest_json, manifest_digest, request_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       ).run(
@@ -109,9 +120,12 @@ export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Pr
         capturedAt
       );
 
-      // Occurrences.
+      // Occurrences. Plain INSERT (loud failure over silent replacement):
+      // an occurrence id already owned by ANOTHER project's capture must
+      // never be overwritten. Within this project, re-ingest of the same
+      // capture is prevented by the idempotency-key check above.
       const insertOccurrence = db.prepare(
-        "INSERT OR REPLACE INTO occurrences (id, project_id, capture_id, entity_version_id, anchor, parent_id, visible_text, bounds_json, completeness, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO occurrences (id, project_id, capture_id, entity_version_id, anchor, parent_id, visible_text, bounds_json, completeness, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       for (const obs of manifest.observations) {
         insertOccurrence.run(

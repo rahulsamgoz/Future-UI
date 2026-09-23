@@ -4,7 +4,7 @@
  * claim SQL — cross-app imports are not allowed.
  */
 import { ProposalOrchestrator, SpecValidator, DeterministicProvider, type ModelProvider, type RendererSchema } from "@ui-intelligence/agent";
-import type { JobKind, UiRequest } from "@ui-intelligence/protocol";
+import type { JobKind } from "@ui-intelligence/protocol";
 import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 import { claimJob, completeJob, enqueueJob, insertOutbox } from "./jobs.js";
@@ -66,7 +66,6 @@ export function processHistoryScan(db: Db, projectId: string, planId: string): v
   updateHistoryPlanStatus(db, planId, "running");
 
   const commits = plan.selectedCommits.map((c) => c.commitSha);
-  let enqueued = 0;
   if (commits.length > 0) {
     const placeholders = commits.map(() => "?").join(",");
     const captures = db
@@ -80,11 +79,9 @@ export function processHistoryScan(db: Db, projectId: string, planId: string): v
         dedupKey: `index_capture:${capture.id}`,
         stage: "indexing",
       });
-      enqueued += 1;
     }
   }
   updateHistoryPlanStatus(db, planId, "completed");
-  return void enqueued;
 }
 
 /** Claim a job and process it inline. Returns the resulting status. */
@@ -143,5 +140,3 @@ export function enqueueProposalJob(db: Db, projectId: string, proposalId: string
   insertOutbox(db, projectId, jobId);
   return jobId;
 }
-
-export type { UiRequest };

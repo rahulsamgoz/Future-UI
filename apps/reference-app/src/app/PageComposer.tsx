@@ -1,6 +1,7 @@
-import { useSyncExternalStore } from "react";
-import type { LayoutNode, PageContract } from "@ui-intelligence/protocol";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import type { EntityContract, LayoutNode, PageContract } from "@ui-intelligence/protocol";
 import { pageLayoutRenderers } from "@ui-intelligence/renderers";
+import { ProposalValidator } from "@ui-intelligence/runtime-core";
 import { useAppServices } from "../Services.js";
 
 type RegionNode = Extract<LayoutNode, { kind: "region" }>;
@@ -19,13 +20,48 @@ export function PageComposer({
   defaultLayout: LayoutNode;
   regions: Record<string, React.ReactNode>;
 }) {
-  const { preferences } = useAppServices();
+  const { preferences, kernel } = useAppServices();
   useSyncExternalStore(preferences.active.subscribe, preferences.active.getVersion);
   const pref = preferences.active.get(`page:${pageContract.pageKey}`);
-  const layout: LayoutNode =
+  const storedLayout: LayoutNode | null =
     pref?.representation === "layout"
       ? (pref.properties as unknown as { layout: LayoutNode }).layout
-      : defaultLayout;
+      : null;
+  // A stored layout is revalidated against the CURRENT page contract every
+  // time it renders (spec sections 7 and 9: each mounting route revalidates
+  // compatibility). A stale layout that would drop required or locked slots
+  // falls back to the default layout.
+  const [validStoredLayout, setValidStoredLayout] = useState<LayoutNode | null>(null);
+  const prefDigest = pref?.digest ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!storedLayout) {
+      setValidStoredLayout(null);
+      return;
+    }
+    void (async () => {
+      const validator = new ProposalValidator(kernel.renderers);
+      const entityContracts = new Map<string, EntityContract>();
+      for (const slot of pageContract.slots) {
+        const entity = kernel.getEntity(slot.entityKey);
+        if (entity) entityContracts.set(slot.entityKey, entity.contract);
+      }
+      const readSet = await kernel.currentReadSet(pageContract.pageKey, 1);
+      const report = await validator.validatePageLayout(
+        storedLayout,
+        pageContract,
+        entityContracts,
+        readSet,
+        1
+      );
+      if (!cancelled) setValidStoredLayout(report.passed ? storedLayout : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefDigest, pageContract.pageKey, kernel]);
+  const layout: LayoutNode = validStoredLayout ?? defaultLayout;
 
   const renderRegion = (region: RegionNode): React.ReactNode => regions[region.slotId] ?? null;
   const rootNode: LayoutNode =
@@ -39,12 +75,4 @@ export function PageComposer({
   }
   const Layout = renderer.component;
   return <Layout node={rootNode} renderRegion={renderRegion} />;
-}
-
-export function usePageLayoutPreference(pageKey: string): LayoutNode | null {
-  const { preferences } = useAppServices();
-  useSyncExternalStore(preferences.active.subscribe, preferences.active.getVersion);
-  const pref = preferences.active.get(`page:${pageKey}`);
-  if (!pref || pref.representation !== "layout") return null;
-  return (pref.properties as unknown as { layout: LayoutNode }).layout;
 }

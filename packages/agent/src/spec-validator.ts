@@ -93,6 +93,18 @@ export class SpecValidator {
         const error = checkProperty(key, prop, value);
         if (error) errors.push({ code: "property_range", message: error, path: `presentation.properties.${key}` });
       }
+      // Strict properties: any key NOT declared in the renderer schema is
+      // rejected, so provider-injected extra keys (style, html, handlers...)
+      // can never pass validation. Mirrors runtime-core's validator.
+      for (const key of Object.keys(pres.properties)) {
+        if (!(key in schema)) {
+          errors.push({
+            code: "property_range",
+            message: `unknown property "${key}" is not in the renderer schema`,
+            path: `presentation.properties.${key}`,
+          });
+        }
+      }
     }
 
     // Binding version: candidates must use the entity's declared binding.

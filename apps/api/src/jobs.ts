@@ -99,6 +99,11 @@ export function heartbeatJob(db: Db, projectId: string, jobId: string, leaseToke
   if (row.status !== "running" || row.lease_token !== leaseToken) {
     throw new UiIntelligenceError("JOB_LEASE_LOST", "lease token does not match the current lease", { httpStatus: 409 });
   }
+  // An expired lease may already have been reclaimed by another worker; a
+  // stale worker cannot heartbeat its way back to a valid lease.
+  if ((row.lease_expires_at as string) < nowIso()) {
+    throw new UiIntelligenceError("JOB_LEASE_LOST", "lease expired; the job may have been reclaimed", { httpStatus: 409 });
+  }
   const leaseExpiresAt = new Date(Date.now() + LEASE_MS).toISOString();
   db.prepare("UPDATE jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ?").run(leaseExpiresAt, nowIso(), jobId);
   return { jobId, leaseToken, leaseExpiresAt };

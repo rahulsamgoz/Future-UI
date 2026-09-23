@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState } from "react";
 import { UiBoundary } from "@ui-intelligence/react";
 import type { FixtureKind, Product } from "../data/catalog.js";
 import {

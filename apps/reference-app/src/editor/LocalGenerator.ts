@@ -4,15 +4,54 @@ import type {
   LayoutNode,
   PageContract,
   Presentation,
-  ProposalCandidate,
-  TargetReadSet,
   ValidationReport,
 } from "@ui-intelligence/protocol";
-import { digestOf } from "@ui-intelligence/protocol";
 import type { RendererDescriptor, RuntimeKernel } from "@ui-intelligence/runtime-core";
 import { ProposalValidator } from "@ui-intelligence/runtime-core";
 import { DeterministicProvider } from "@ui-intelligence/agent";
 import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
+
+/**
+ * Build ONE validated, content-digested candidate for a specific
+ * representation (used by the batch path so it goes through the same
+ * validation as generated candidates — never bypass the validator).
+ */
+export async function validatedCandidate(
+  kernel: RuntimeKernel,
+  instance: RuntimeInstanceInfo,
+  representation: string,
+  properties: Record<string, JsonValue>,
+  originKind: LocalCandidate["originKind"] = "generated",
+  summary = `${representation} variant`
+): Promise<LocalCandidate | null> {
+  const contract = instance.contract;
+  if (!contract.allowedRepresentations.includes(representation)) return null;
+  const descriptor = kernel.renderers.get(representation);
+  if (!descriptor) return null;
+  const validator = new ProposalValidator(kernel.renderers);
+  const readSet = await kernel.currentReadSet(contract.entityKey, 1);
+  const presentation: Presentation = {
+    type: representation,
+    properties,
+    dataBinding: contract.dataBinding,
+    actions: contract.actions,
+  };
+  const report = await validator.validatePresentation(presentation, contract, readSet, 1);
+  if (!report.passed) return null;
+  return {
+    candidateId: `cand_${representation}`,
+    representation,
+    properties,
+    originKind,
+    summary,
+    validation: report,
+    digest: report.specificationDigest,
+    requiredRendererVersions: { [descriptor.id]: descriptor.version },
+    contractVersion: contract.contractVersion,
+    dataBindingId: contract.dataBinding,
+    actionIds: contract.actions,
+  };
+}
 
 export type LocalCandidate = {
   candidateId: string;
@@ -23,6 +62,9 @@ export type LocalCandidate = {
   validation: ValidationReport;
   digest: string;
   requiredRendererVersions: Record<string, number>;
+  contractVersion: number;
+  dataBindingId: string;
+  actionIds: string[];
 };
 
 /**
@@ -86,6 +128,9 @@ export class LocalGenerator {
         validation: report,
         digest: report.specificationDigest,
         requiredRendererVersions: descriptor ? { [descriptor.id]: descriptor.version } : {},
+        contractVersion: contract.contractVersion,
+        dataBindingId: contract.dataBinding,
+        actionIds: contract.actions,
       });
     }
     return candidates;
@@ -99,7 +144,6 @@ export class LocalGenerator {
     count = 3
   ): Promise<Array<{ layout: LayoutNode; validation: ValidationReport }>> {
     const layouts: LayoutNode[] = [];
-    const slotIds = pageContract.slots.map((s) => s.slotId);
     const regions = (n: LayoutNode): Array<Extract<LayoutNode, { kind: "region" }>> =>
       n.kind === "region" ? [n] : n.children.flatMap(regions);
     const existing = regions(currentLayout);
@@ -132,17 +176,6 @@ export class LocalGenerator {
       const validation = await validator.validatePageLayout(layout, pageContract, entityContracts, readSet, 1);
       out.push({ layout, validation });
     }
-    void slotIds;
     return out;
   }
 }
-
-/** Digest helper for candidate specs (presentation + target identity). */
-export async function candidateDigest(
-  presentation: Presentation,
-  entityKey: string
-): Promise<string> {
-  return digestOf({ presentation, entityKey });
-}
-
-export type { ProposalCandidate, TargetReadSet };

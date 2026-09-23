@@ -59,11 +59,15 @@ describe("uiIntelligencePlugin", () => {
       expect(publicManifest.protocolVersion).toBe(1);
       expect(publicManifest.projectKey).toBe("test-app");
       expect(publicManifest.entities).toEqual([{ entityKey: "catalog.productChooser", pageKey: "catalog" }]);
-      expect(publicManifest.buildId).toMatch(/^[0-9a-f]{12}-[0-9a-f]{16}$/);
+      // Public buildId is an opaque hash — no commit SHA or PREFIX of it.
+      expect(publicManifest.buildId).toMatch(/^[0-9a-f]+(-[0-9a-f]+)?$/);
 
-      // Public manifest must not leak source paths, symbols, or the commit SHA.
+      // Public manifest must not leak source paths, symbols, or the commit SHA
+      // (including any prefix long enough to identify the commit).
       const commitSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
       expect(publicRaw).not.toContain(commitSha);
+      expect(publicRaw).not.toContain(commitSha.slice(0, 12));
+      expect(publicRaw).not.toContain(commitSha.slice(0, 8));
       expect(publicRaw).not.toContain("src/app.js");
       expect(publicRaw).not.toContain("App");
       expect(publicManifest.adapterCapabilities).toBeDefined();

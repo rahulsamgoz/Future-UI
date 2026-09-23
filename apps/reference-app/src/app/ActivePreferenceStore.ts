@@ -49,7 +49,3 @@ export class ActivePreferenceStore {
     this.listeners.forEach((l) => l());
   }
 }
-
-export function preferenceScopeKey(entityKey: string, instanceKey?: string): string {
-  return instanceKey ? `${entityKey}#${instanceKey}` : entityKey;
-}

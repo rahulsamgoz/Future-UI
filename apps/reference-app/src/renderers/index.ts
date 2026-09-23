@@ -1,4 +1,3 @@
-import type { RendererDescriptor } from "@ui-intelligence/runtime-core";
 import type { RendererProps } from "@ui-intelligence/react";
 
 /**

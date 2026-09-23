@@ -13,3 +13,4 @@ test-results/
 uploads/
 artifacts-store/
 .vite/
+dist-private/

@@ -1,19 +1,9 @@
 import { InstanceRegistry, RendererRegistry, RuntimeKernel } from "@ui-intelligence/runtime-core";
 import type { RendererProps } from "@ui-intelligence/react";
 import type { ComponentType } from "react";
-import { registerAllRenderers } from "@ui-intelligence/renderers";
+import { registerAllRenderers, rendererComponents } from "@ui-intelligence/renderers";
 import { getBuildId } from "./build.js";
-import {
-  adminPanelContract,
-  buttonContract,
-  productChooserContract,
-  profileFormContract,
-  relatedProductsContract,
-  sortControlContract,
-  transactionListContract,
-} from "./contracts.js";
 import { appRendererDescriptors, appRendererComponents } from "./renderers/index.js";
-import { rendererComponents } from "@ui-intelligence/renderers";
 
 /**
  * The runtime kernel: registered capabilities and approved renderers.
@@ -37,13 +27,3 @@ export function createAppKernel(): RuntimeKernel {
 export function appRendererMap(): Record<string, ComponentType<RendererProps>> {
   return { ...rendererComponents, ...appRendererComponents };
 }
-
-export {
-  adminPanelContract,
-  buttonContract,
-  productChooserContract,
-  profileFormContract,
-  relatedProductsContract,
-  sortControlContract,
-  transactionListContract,
-};

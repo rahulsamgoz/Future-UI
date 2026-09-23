@@ -212,12 +212,10 @@ export function createWorker(db: WorkerDb, deps: WorkerDeps = {}): Worker {
     }
   }
 
-  let loopPromise: Promise<void> | null = null;
-
   return {
     start() {
       stopped = false;
-      loopPromise = loop();
+      void loop();
     },
     stop() {
       stopped = true;
@@ -237,16 +235,6 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Job kind handlers
 // ---------------------------------------------------------------------------
-
-type OccurrenceRow = {
-  id: string;
-  capture_id: string;
-  anchor: string | null;
-  visible_text: string | null;
-  commit_sha: string;
-  scenario_id: string;
-  created_at: string;
-};
 
 /** index_capture: search_index rows + lineage candidates for adjacent commits. */
 export async function handleIndexCapture(db: WorkerDb, job: ClaimedJob): Promise<void> {

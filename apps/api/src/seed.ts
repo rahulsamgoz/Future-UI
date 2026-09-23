@@ -29,14 +29,26 @@ const density: RendererPropertySchema = {
   default: "comfortable",
 };
 
+/**
+ * Renderer property schemas. These MUST mirror the renderers the reference
+ * app actually registers (packages/renderers + apps/reference-app/src/renderers);
+ * server-side proposal validation is only as trustworthy as this alignment.
+ */
 export const RENDERER_SCHEMAS: Record<string, Record<string, RendererPropertySchema>> = {
-  "carousel@1": { density, visibleCount: { type: "number", min: 1, max: 5, default: 3 } },
+  // packages/renderers product presentations
+  "carousel@1": { perView: { type: "number", min: 1, max: 4, default: 3 }, density },
   "grid@1": { columns: { type: "number", min: 1, max: 4, default: 3 }, density },
-  "table@1": { columns: { type: "number", min: 2, max: 6, default: 4 }, density },
-  "select@1": { density },
-  "button-group@1": { orientation: { type: "enum", values: ["horizontal", "vertical"], default: "horizontal" } },
-  "form@1": { density },
-  "card@1": { density },
+  "table@1": { density, showPrice: { type: "boolean", default: true }, zebra: { type: "boolean", default: true } },
+  // packages/renderers buttons
+  "button.default@1": { label: { type: "string", default: "" }, variant: { type: "enum", values: ["default", "compact"], default: "default" } },
+  "button.compact@1": { label: { type: "string", default: "" }, variant: { type: "enum", values: ["default", "compact"], default: "compact" } },
+  // app-owned presentations (apps/reference-app/src/renderers/registry.ts)
+  "sort.select@1": { align: { type: "enum", values: ["left", "right"], default: "left" } },
+  "sort.segments@1": { align: { type: "enum", values: ["left", "right"], default: "left" } },
+  "form.standard@1": { showBio: { type: "boolean", default: true } },
+  "form.compact@1": { showBio: { type: "boolean", default: false } },
+  "panel.standard@1": { emphasis: { type: "enum", values: ["normal", "high"], default: "normal" } },
+  "list.virtual@1": { rowHeight: { type: "number", min: 32, max: 96, default: 48 } },
 };
 
 type ManifestEntity = RuntimeManifest["entities"][number];
@@ -54,17 +66,17 @@ const ENTITIES: Array<ManifestEntity & { id: string }> = [
     id: "ent_catalog_sort_control",
     entityKey: "catalog.sortControl",
     contractVersion: 1,
-    allowedRepresentations: ["select@1", "button-group@1"],
-    dataBinding: "catalog.sort@1",
-    actions: ["sort.set@1"],
+    allowedRepresentations: ["sort.select@1", "sort.segments@1"],
+    dataBinding: "catalog.sortState@1",
+    actions: ["catalog.sort@1"],
   },
   {
     id: "ent_account_profile_form",
     entityKey: "account.profileForm",
     contractVersion: 1,
-    allowedRepresentations: ["form@1", "card@1"],
+    allowedRepresentations: ["form.standard@1", "form.compact@1"],
     dataBinding: "account.profile@1",
-    actions: ["profile.save@1"],
+    actions: ["account.saveProfile@1"],
   },
 ];
 

@@ -91,6 +91,7 @@ export function createSortStateBinding(initial: "featured" | "price-asc" | "pric
   setOrder: (order: "featured" | "price-asc" | "price-desc") => void;
 } {
   let order = initial;
+  let tick = 1;
   let revision = "sort-1";
   const listeners = new Set<() => void>();
   return {
@@ -104,7 +105,10 @@ export function createSortStateBinding(initial: "featured" | "price-asc" | "pric
     },
     setOrder(next) {
       order = next;
-      revision = `sort-${revision.split("-").length + 1}`;
+      // Monotonic revision: every change must produce a NEW revision string
+      // or the snapshot cache serves stale data after the first change.
+      tick += 1;
+      revision = `sort-${tick}`;
       listeners.forEach((l) => l());
     },
   };

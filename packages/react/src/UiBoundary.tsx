@@ -11,7 +11,7 @@ import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
 import { useCallback, useRef } from "react";
 import { useUiRuntime } from "./context.js";
 import { findLogicalParent, trackLogicalInstance } from "./logical.js";
-import type { RendererProps, UiBoundaryProps } from "./types.js";
+import type { UiBoundaryProps } from "./types.js";
 import { useDataSnapshot } from "./useDataSnapshot.js";
 
 export function UiBoundary({
@@ -102,8 +102,12 @@ export function UiBoundary({
   const data = useDataSnapshot(bindings.data);
 
   // (c) Resolve the renderer for the preferred representation, falling back
-  // through the contract's allowed representations.
-  const preferred = preferredRepresentation ?? contract.allowedRepresentations[0];
+  // through the contract's allowed representations. A preference persisted
+  // under an older build may name a representation the CURRENT contract no
+  // exposes; such a preference is ignored and the canonical interface renders.
+  const allowed = new Set(contract.allowedRepresentations);
+  const preferredRaw = preferredRepresentation ?? contract.allowedRepresentations[0];
+  const preferred = allowed.has(preferredRaw) ? preferredRaw : contract.allowedRepresentations[0];
   const candidates = [preferred, ...contract.allowedRepresentations.filter((id) => id !== preferred)];
   const rendererId = candidates.find((id) => renderers?.[id] !== undefined);
   const Active = rendererId !== undefined ? renderers?.[rendererId] : undefined;
@@ -129,5 +133,3 @@ export function UiBoundary({
     </div>
   );
 }
-
-export type { RendererProps };

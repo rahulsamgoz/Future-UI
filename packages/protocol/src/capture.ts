@@ -4,6 +4,7 @@
  * by both build and scenario.
  */
 import { z } from "zod";
+import { canonicalJson } from "./ids.js";
 import type { ArtifactId, CaptureId, EntityVersionId, OccurrenceId, SourceDefinitionId } from "./ids.js";
 import type { EvidenceLabel, SourceLinkEvidence } from "./evidence.js";
 
@@ -106,9 +107,10 @@ export type CaptureManifest = z.infer<typeof captureManifestSchema>;
 
 export type CaptureRequestKey = string;
 
-/** Canonical serialization used to build the capture request key. */
+/** Canonical serialization used to build the capture request key (spec
+ * section 11: canonical serialization — key order must not matter). */
 export function captureRequestKey(spec: CaptureSpec): CaptureRequestKey {
-  return JSON.stringify([
+  return canonicalJson([
     spec.protocolVersion,
     spec.projectId,
     spec.commitSha,

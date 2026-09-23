@@ -5,7 +5,6 @@ import { UiIntelligenceError } from "@ui-intelligence/protocol";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
-import { nowIso } from "../db.js";
 import { enqueueJob, insertOutbox } from "../jobs.js";
 import { planHistory } from "../planner.js";
 import { getHistoryPlan, getProject, listProjects } from "../store.js";

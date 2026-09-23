@@ -163,7 +163,9 @@ export class ApiClient {
 
   /** Screenshots are fetched as blobs (with auth) and rendered via object URLs. */
   async fetchArtifactBlob(artifactId: string): Promise<Blob> {
-    const res = await fetch(`${this.baseUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/raw`, {
+    const res = await fetch(
+      `${this.baseUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/raw?projectId=${encodeURIComponent(projectId)}`,
+      {
       headers: this.headers(),
     });
     if (!res.ok) throw new Error(`artifact fetch failed: ${res.status}`);

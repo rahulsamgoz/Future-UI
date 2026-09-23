@@ -87,8 +87,7 @@ export class MemoryPreferenceStore implements PreferenceStore {
     this.#applications.set(applicationId, record);
     // Ensure the proposed specifications are persisted so undo/restore can
     // reactivate previous digests later.
-    for (const [scopeKey, entry] of Object.entries(proposed)) {
-      void scopeKey;
+    for (const entry of Object.values(proposed)) {
       if (!this.#specifications.has(entry.digest)) {
         this.#specifications.set(entry.digest, {
           digest: entry.digest,

@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import { UiBoundary } from "@ui-intelligence/react";
-import { newId } from "@ui-intelligence/protocol";
 import {
   createAdminStatsBinding,
   createFormStateAdapter,
@@ -20,7 +19,7 @@ import {
 } from "../contracts.js";
 import { useAppServices } from "../Services.js";
 import { PageComposer } from "../app/PageComposer.js";
-import { useActivePreference, useActivePreferenceFor } from "../app/hooks.js";
+import { useActivePreference } from "../app/hooks.js";
 import { appRendererMap } from "../kernel.js";
 import { useFixture } from "./CatalogPage.js";
 
@@ -138,8 +137,4 @@ export function AccountPage() {
       {savedToast && <div className="toast" role="status">{savedToast}</div>}
     </main>
   );
-}
-
-export function invocationHelp(): string {
-  return newId("inv");
 }

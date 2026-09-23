@@ -114,7 +114,11 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     const artifactId = (request.params as { id: string }).id;
     const query = request.query as { projectId?: string };
     const artifact = getArtifact(db, null, artifactId);
-    if (!artifact || (query.projectId && query.projectId !== artifact.project_id)) {
+    // Project ownership is verified from the artifact ROW — the projectId
+    // query param must be present AND match. (Dev profile: a single operator
+    // token authenticates the caller; this check keeps projects isolated
+    // from each other's artifact bytes.)
+    if (!artifact || !query.projectId || query.projectId !== artifact.project_id) {
       throw new UiIntelligenceError("NOT_FOUND", `artifact ${artifactId} not found`, { httpStatus: 404 });
     }
     const bytes = store.get(artifact.digest as string);

@@ -160,6 +160,14 @@ export class OperationCoordinator {
       await store.finalizeApplication(applicationId);
     } catch (error) {
       if (isRevisionConflict(error)) {
+        // A concurrent operation won the revision race. Mark this losing
+        // application failed so it does not linger as pending until startup
+        // recovery; the caller restores the previous live view.
+        try {
+          await store.rollbackApplication(applicationId, "finalize conflict: concurrent revision change");
+        } catch {
+          /* record already terminal */
+        }
         return { applicationId, status: "conflict" };
       }
       throw error;

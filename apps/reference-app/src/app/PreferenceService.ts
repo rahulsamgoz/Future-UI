@@ -1,7 +1,6 @@
 import type {
   ApplicationRecord,
   JsonValue,
-  LayoutNode,
   PreferenceKey,
   Proposal,
   TargetReadSet,
@@ -10,13 +9,17 @@ import { newId } from "@ui-intelligence/protocol";
 import type { PreferenceStore } from "@ui-intelligence/preferences";
 import { OperationCoordinator } from "@ui-intelligence/runtime-core";
 import { IdbPreferenceStore, MemoryPreferenceStore } from "@ui-intelligence/preferences";
-import { ActivePreferenceStore, preferenceScopeKey } from "./ActivePreferenceStore.js";
+import { ActivePreferenceStore } from "./ActivePreferenceStore.js";
 
 export type ApplyCandidate = {
   representation: string;
   properties: Record<string, JsonValue>;
   digest: string;
   requiredRendererVersions: Record<string, number>;
+  /** Contract identity the candidate was validated against. */
+  contractVersion: number;
+  dataBindingId: string;
+  actionIds: string[];
 };
 
 export type Switcher = Parameters<OperationCoordinator["apply"]>[4];
@@ -48,14 +51,17 @@ function buildProposal(
   representation: string,
   properties: Record<string, JsonValue>,
   readSet: TargetReadSet,
-  scope: Proposal["target"]["scope"]
+  scope: Proposal["target"]["scope"],
+  contractVersion = 1,
+  dataBinding = "",
+  actions: string[] = []
 ): Proposal {
   return {
     schemaVersion: 1,
     proposalId,
     target: {
       entityId: entityKey,
-      entityVersionId: `${entityKey}@1`,
+      entityVersionId: `${entityKey}@${contractVersion}`,
       scope,
       lockedEntityIds: [],
       batchTargets: [],
@@ -66,9 +72,20 @@ function buildProposal(
       policyVersion: readSet.policyVersion,
       preferenceRevision: readSet.preferenceRevision,
     },
-    presentation: { type: representation, properties, dataBinding: "", actions: [] },
+    presentation: { type: representation, properties, dataBinding, actions },
     origin: { kind: "generated", referenceIds: [] },
-  };
+    // Store-level extension: the contract version this specification was
+    // validated against, so startup revalidation can detect contract bumps.
+    contractVersion,
+    dataBindingId: dataBinding,
+    actionIds: actions,
+  } as Proposal & { contractVersion: number; dataBindingId: string; actionIds: string[] };
+}
+
+/** Read the stored contract version from a specification record's proposal. */
+function storedContractVersion(spec: { proposal: unknown }): number | undefined {
+  const v = (spec.proposal as { contractVersion?: unknown } | null)?.contractVersion;
+  return typeof v === "number" ? v : undefined;
 }
 
 export class PreferenceService {
@@ -114,17 +131,21 @@ export class PreferenceService {
       if (!spec) continue;
       // Release compatibility: revalidate against the current contract.
       const expectedVersion = contractVersions.get(scopeKey);
-      if (expectedVersion !== undefined && spec.proposal && (spec.proposal as { contractVersion?: number }).contractVersion !== undefined) {
-        const specContractVersion = (spec.proposal as { contractVersion?: number }).contractVersion;
-        if (specContractVersion !== expectedVersion) {
-          this.drafts.set(scopeKey, {
-            reason: `contract changed (stored v${specContractVersion}, current v${expectedVersion})`,
-            digest: pref.activeSpecificationDigest,
-          });
-          continue;
-        }
+      const stored = spec.proposal as { contractVersion?: number } | null | undefined;
+      if (
+        expectedVersion !== undefined &&
+        stored?.contractVersion !== undefined &&
+        stored.contractVersion !== expectedVersion
+      ) {
+        this.drafts.set(scopeKey, {
+          reason: `contract changed (stored v${stored.contractVersion}, current v${expectedVersion})`,
+          digest: pref.activeSpecificationDigest,
+        });
+        continue;
       }
-      const presentation = (spec.proposal as { presentation?: { type?: string; properties?: Record<string, JsonValue> } }).presentation;
+      const presentation = (
+        spec.proposal as { presentation?: { type?: string; properties?: Record<string, JsonValue> } }
+      ).presentation;
       if (presentation?.type) {
         this.active.set(scopeKey, {
           representation: presentation.type,
@@ -152,7 +173,7 @@ export class PreferenceService {
       candidate.representation,
       candidate.properties,
       readSet,
-      scope === "page" ? "page" : scope === "instance" ? "instance" : "entity"
+      scope
     );
     // Persist the immutable specification record before the transaction.
     await this.store.putSpecification({
@@ -220,7 +241,10 @@ export class PreferenceService {
           p.candidate.representation,
           p.candidate.properties,
           p.readSet,
-          "batch"
+          "batch",
+          p.candidate.contractVersion,
+          p.candidate.dataBindingId,
+          p.candidate.actionIds
         );
         await this.store.putSpecification({
           digest: p.candidate.digest,
@@ -241,7 +265,7 @@ export class PreferenceService {
           previousRevision: current?.revision ?? 0,
           previousDigest: current?.activeSpecificationDigest ?? null,
           proposedDigest: p.candidate.digest,
-          contractVersion: 1,
+          contractVersion: p.candidate.contractVersion,
         });
         prepared.push({ key, scopeKey: p.scopeKey });
         proposed[p.scopeKey] = {
@@ -331,7 +355,7 @@ export class PreferenceService {
 
   async lastApplication(): Promise<ApplicationRecord | null> {
     const apps = await this.store.listApplications("active");
-    return apps.length ? (apps[apps.length - 1] as ApplicationRecord) : null;
+    return apps.at(-1) ?? null;
   }
 
   async listApplications(): Promise<ApplicationRecord[]> {
@@ -365,5 +389,3 @@ export class PreferenceService {
     return this.store.importBundle(bundle);
   }
 }
-
-export type { LayoutNode };

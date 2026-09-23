@@ -2,7 +2,7 @@
  * Auth + trace-id handling. Every /v1 response carries x-trace-id; missing or
  * wrong bearer tokens produce 401 ErrorResponse {error, traceId}.
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ErrorCode } from "@ui-intelligence/protocol";
 
@@ -16,16 +16,24 @@ export type AuthOptions = {
   token: string;
 };
 
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
 export function verifyToken(request: FastifyRequest, token: string): boolean {
+  // Constant-time comparison for both transports.
   const header = request.headers.authorization ?? "";
-  if (header === `Bearer ${token}`) return true;
+  if (header.startsWith("Bearer ") && safeEqual(header.slice(7), token)) return true;
   // Dev-profile fallback: the Vorflux preview proxy strips Authorization
   // headers. Accept the same token via access_token query parameter so the
   // browser editor can reach the API through a public preview URL. This is
   // equivalent in strength to the bearer token and only widens the transport.
   const query = request.url.split("?", 2)[1] ?? "";
   const params = new URLSearchParams(query);
-  return params.get("access_token") === token;
+  const queryToken = params.get("access_token");
+  return queryToken !== null && safeEqual(queryToken, token);
 }
 
 export function sendError(reply: FastifyReply, traceId: string, status: number, code: ErrorCode, message: string, details?: unknown): void {

@@ -12,7 +12,7 @@ import type {
   CaptureSpec,
   Observation,
 } from "@ui-intelligence/protocol";
-import { buildObservationsFromEvaluation, redactText, sanitizeVisibleText } from "./observations.js";
+import { buildObservationsFromEvaluation } from "./observations.js";
 import type { EntityEvaluation, RedactionPolicy, ScenarioRecipe } from "./types.js";
 
 export type { RedactionPolicy, ScenarioRecipe } from "./types.js";
@@ -97,9 +97,28 @@ export function buildCaptureUrl(baseUrl: string, recipe: ScenarioRecipe): string
 }
 
 /** In-page collection of registered boundary elements (runs via page.evaluate). */
-function collectEntitiesInPage(): EntityEvaluation[] {
+function collectEntitiesInPage(maskedSelectors: string[] = []): EntityEvaluation[] {
   // Self-contained: page.evaluate serializes this function body only, so all
   // helpers must live inside it.
+  // Masked elements (redaction policy) report "[REDACTED]" text so the secret
+  // never enters observation text — masking pixels alone is not enough
+  // (spec section 14).
+  const maskedElements = new Set<Element>();
+  for (const selector of maskedSelectors) {
+    try {
+      document.querySelectorAll(selector).forEach((el) => maskedElements.add(el));
+    } catch {
+      // Invalid selector for this document: skip.
+    }
+  }
+  const isMasked = (el: Element): boolean => {
+    let cursor: Element | null = el;
+    while (cursor) {
+      if (maskedElements.has(cursor)) return true;
+      cursor = cursor.parentElement;
+    }
+    return false;
+  };
   function implicitRole(node: HTMLElement): string | undefined {
     const tag = node.tagName.toLowerCase();
     if (tag === "button") return "button";
@@ -133,7 +152,7 @@ function collectEntitiesInPage(): EntityEvaluation[] {
       anchor: node.dataset.uiEntity ?? "",
       ...(node.dataset.uiInstance === undefined ? {} : { instanceKey: node.dataset.uiInstance }),
       ...(role === undefined ? {} : { role }),
-      visibleText: (node.textContent ?? "").trim(),
+      visibleText: isMasked(node) ? "[REDACTED]" : (node.textContent ?? "").trim(),
       rect: {
         x: rect.x + window.scrollX,
         y: rect.y + window.scrollY,
@@ -148,12 +167,10 @@ function collectEntitiesInPage(): EntityEvaluation[] {
 
 export class ScenarioRunner {
   private readonly baseUrl: string;
-  private readonly adapterVersion: string;
   private readonly redactionPolicy: RedactionPolicy;
 
   constructor(opts: { baseUrl: string; adapterVersion: string; redactionPolicy: RedactionPolicy }) {
     this.baseUrl = opts.baseUrl;
-    this.adapterVersion = opts.adapterVersion;
     this.redactionPolicy = opts.redactionPolicy;
   }
 
@@ -227,9 +244,13 @@ export class ScenarioRunner {
       }
 
       const screenshotBytes = new Uint8Array(await page.screenshot({ fullPage: true, type: "png" }));
-      for (const restore of restoreFns) await restore();
 
-      const evaluated = await page.evaluate(collectEntitiesInPage);
+      // Collect observations WHILE masks are still applied: masked elements
+      // are redacted from pixels AND from observation text (spec section 14 —
+      // masking pixels alone does not remove the secret from DOM text).
+      const maskedSelectorList = this.redactionPolicy.masks.map((m) => m.selector);
+      const evaluated = await page.evaluate(collectEntitiesInPage, maskedSelectorList);
+      for (const restore of restoreFns) await restore();
       const observations: Observation[] = buildObservationsFromEvaluation({
         captureId,
         screenshotArtifactId,

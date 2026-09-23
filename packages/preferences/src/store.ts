@@ -13,7 +13,6 @@ import type {
   PreferenceKey,
   PreferenceRecord,
   SpecificationRecord,
-  SyncOperation,
 } from "@ui-intelligence/protocol";
 
 export type ApplicationParticipantInput = {
@@ -69,5 +68,3 @@ export interface PreferenceStore {
   listApplications(status?: ApplicationStatus): Promise<ApplicationRecord[]>;
   close(): void | Promise<void>;
 }
-
-export type { SyncOperation };
