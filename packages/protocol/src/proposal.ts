@@ -26,7 +26,7 @@ export const layoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
       kind: z.literal("layout"),
       nodeId: z.string().min(1),
       type: z.enum(["stack@1", "grid@1", "split@1"]),
-      properties: z.record(z.unknown()).default({}),
+      properties: z.record(z.custom<JsonValue>(() => true)).default({}),
       children: z.array(layoutNodeSchema),
     }),
     z.object({
