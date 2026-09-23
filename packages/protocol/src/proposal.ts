@@ -20,7 +20,7 @@ export const presentationSchema = z.object({
 });
 export type Presentation = z.infer<typeof presentationSchema>;
 
-export const layoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
+export const layoutNodeSchema: z.ZodType<LayoutNode, z.ZodTypeDef, unknown> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("layout"),
