@@ -31,7 +31,7 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
 
   app.post("/v1/projects/:p/artifact-uploads", async (request, reply) => {
     const projectId = (request.params as { p: string }).p;
-    const body = request.body as { mediaType?: string; byteSize?: number; digest?: string };
+    const body = request.body as { mediaType?: string; byteSize?: number; digest?: string; artifactId?: string };
     if (!body.mediaType || !ALLOWED_MEDIA_TYPES.has(body.mediaType)) {
       throw new UiIntelligenceError("SCHEMA_INVALID", `mediaType must be one of ${[...ALLOWED_MEDIA_TYPES].join(", ")}`, {
         httpStatus: 422,
@@ -44,7 +44,19 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
       throw new UiIntelligenceError("SCHEMA_INVALID", "digest must be a sha-256 hex string", { httpStatus: 422 });
     }
     const slotId = `slot_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+    // Optional client-supplied artifact id (the capture manifest references
+    // it). Validated for shape only; uniqueness is enforced by the PRIMARY KEY.
+    if (body.artifactId !== undefined && !/^artifact_[a-z0-9]+$/.test(body.artifactId)) {
+      throw new UiIntelligenceError("SCHEMA_INVALID", "artifactId must match artifact_[a-z0-9]+", { httpStatus: 422 });
+    }
     const now = nowIso();
+    if (body.artifactId !== undefined) {
+      // Reserve the client's artifact id with the slot digest so the capture
+      // manifest's reference resolves after upload.
+      db.prepare(
+        "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'standard', ?)"
+      ).run(body.artifactId, projectId, kindForMediaType(body.mediaType), body.digest, body.mediaType, body.byteSize, now);
+    }
     db.prepare(
       "INSERT INTO upload_slots (id, project_id, media_type, byte_size, digest, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)"
     ).run(slotId, projectId, body.mediaType, body.byteSize, body.digest, now, new Date(Date.now() + SLOT_TTL_MS).toISOString());
@@ -75,10 +87,22 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     // Digest verification happens inside ObjectStore.put (mismatch => 422).
     store.put(slot.digest as string, body);
 
-    const artifactId = `art_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    db.prepare(
-      "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES (?, ?, ?, ?, ?, ?, 'project', 'standard', ?)"
-    ).run(artifactId, slot.project_id, kindForMediaType(slot.media_type as string), slot.digest, slot.media_type, slot.byte_size, nowIso());
+    // If the client reserved an artifact id at slot-allocation time (its
+    // manifest references that id), mark it ready. Otherwise allocate a new
+    // one. Bytes were digest-verified by store.put above.
+    const reserved = db
+      .prepare("SELECT id FROM artifacts WHERE project_id = ? AND digest = ? AND visibility = 'pending'")
+      .get(slot.project_id, slot.digest) as { id: string } | undefined;
+    let artifactId: string;
+    if (reserved) {
+      artifactId = reserved.id;
+      db.prepare("UPDATE artifacts SET visibility = 'project' WHERE id = ? AND project_id = ?").run(artifactId, slot.project_id);
+    } else {
+      artifactId = `art_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+      db.prepare(
+        "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES (?, ?, ?, ?, ?, ?, 'project', 'standard', ?)"
+      ).run(artifactId, slot.project_id, kindForMediaType(slot.media_type as string), slot.digest, slot.media_type, slot.byte_size, nowIso());
+    }
     db.prepare("UPDATE upload_slots SET status = 'filled' WHERE id = ?").run(slotId);
     return reply.code(200).send({ artifactId, digest: slot.digest });
   });

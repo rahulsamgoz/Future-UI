@@ -18,5 +18,18 @@ export default defineConfig({
       ]
     })
   ],
-  server: { port: 5173 }
+  server: {
+    port: 5173,
+    host: "0.0.0.0",
+    allowedHosts: true,
+    // Same-origin API access in dev: /v1 is forwarded to the local API so
+    // the browser never makes a cross-origin call (works on localhost AND
+    // through the public preview proxy).
+    proxy: {
+      "/v1": {
+        target: process.env.UI_INTEL_API_TARGET ?? "http://localhost:8787",
+        changeOrigin: true,
+      },
+    },
+  },
 });

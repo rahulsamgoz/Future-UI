@@ -47,7 +47,12 @@ function rowToJson<T>(row: unknown): T {
 }
 
 export function getProject(db: Db, projectId: string): ProjectRow | null {
-  const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId) as Record<string, unknown> | undefined;
+  // Accept the project id or the project name as the URL identifier (dev
+  // profile: the runtime uses "reference-app" while storage uses
+  // "proj_reference_app"). Both resolve to the same stored project.
+  const row = db
+    .prepare("SELECT * FROM projects WHERE id = ? OR name = ?")
+    .get(projectId, projectId) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
     id: row.id as string,

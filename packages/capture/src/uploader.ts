@@ -36,6 +36,9 @@ export class CaptureUploader {
         mediaType: "image/png",
         byteSize: screenshotBytes.byteLength,
         digest,
+        // The capture manifest references this artifact id; the server uses
+        // it when creating the artifact record so the reference resolves.
+        artifactId: manifest.artifacts.find((a) => a.kind === "screenshot-png")?.artifactId,
       }),
     });
     if (slotResponse.status !== 201) {
@@ -44,8 +47,12 @@ export class CaptureUploader {
       });
     }
     const slot = (await slotResponse.json()) as ArtifactSlot;
+    // The API may return an absolute URL or a path relative to its base.
+    const uploadUrl = slot.uploadUrl.startsWith("http")
+      ? slot.uploadUrl
+      : new URL(slot.uploadUrl, `${base}/`).toString();
 
-    const putResponse = await fetch(slot.uploadUrl, {
+    const putResponse = await fetch(uploadUrl, {
       method: "PUT",
       headers: { ...authHeaders(api.token), "content-type": "image/png" },
       body: screenshotBytes as unknown as BodyInit,

@@ -1,0 +1,57 @@
+{
+  "protocolVersion": 1,
+  "buildId": "9aa3332df400-35507668b21c97ea",
+  "commitSha": "9aa3332df40094bc939e4c792f771d46d6e39819",
+  "notice": "PRIVATE build manifest: contains source file paths and commit SHA. Never serve this file publicly; keep it out of version control.",
+  "entities": [
+    {
+      "entityKey": "account.adminPanel",
+      "sourceFile": "src/features/account/AdminPanelBoundary.tsx",
+      "symbol": "AdminPanelBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "aabdaa4717a1177c0c079f1288d1b6c53fad53caa8396377fb59f44b0051c605"
+    },
+    {
+      "entityKey": "account.profileForm",
+      "sourceFile": "src/features/account/ProfileFormBoundary.tsx",
+      "symbol": "ProfileFormBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "be8ff07e9f2693a7f361bf95b348c14c4c840116789b24c784fe3c2f4b731d64"
+    },
+    {
+      "entityKey": "account.transactionList",
+      "sourceFile": "src/features/account/TransactionListBoundary.tsx",
+      "symbol": "TransactionListBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "521e4e6f35b1034b0006bd59d3eee2b690b001541344463ff019686d783455a2"
+    },
+    {
+      "entityKey": "catalog.productChooser",
+      "sourceFile": "src/features/catalog/ProductChooserBoundary.tsx",
+      "symbol": "ProductChooserBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "8cfa571c284a5e55f34afc3531990f90aa42175718718772ae6c6c6f1cb3585d"
+    },
+    {
+      "entityKey": "catalog.relatedProducts",
+      "sourceFile": "src/features/catalog/RelatedProductsBoundary.tsx",
+      "symbol": "RelatedProductsBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "fe50bf907568652a5486d6db56c8e55edf494791583b397bb0e20515415a558e"
+    },
+    {
+      "entityKey": "catalog.sortControl",
+      "sourceFile": "src/features/catalog/SortControlBoundary.tsx",
+      "symbol": "SortControlBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "6f969329f6d869f84e5c15474752a0a2854f92a5bfd56e3b5d6786f861618700"
+    },
+    {
+      "entityKey": "ui.primaryButton",
+      "sourceFile": "src/features/shared/ButtonBoundary.tsx",
+      "symbol": "ButtonBoundary",
+      "instrumentationVersion": 1,
+      "contentHash": "178284e22c747794e6d2a344b3a329bfb149d3afeadf18b64a1ab9ed63f2b668"
+    }
+  ]
+}

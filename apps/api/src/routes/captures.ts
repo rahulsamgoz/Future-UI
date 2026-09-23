@@ -25,7 +25,14 @@ export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Pr
       throw new UiIntelligenceError("SCHEMA_INVALID", "idempotency-key header is required", { httpStatus: 400 });
     }
 
-    const parsed = captureManifestSchema.safeParse(request.body);
+    // Accept the manifest directly or wrapped as { manifest } (capture
+    // package envelope shape).
+    const rawBody = request.body as { manifest?: unknown } | unknown;
+    const manifestCandidate =
+      rawBody && typeof rawBody === "object" && "manifest" in rawBody && rawBody.manifest
+        ? (rawBody as { manifest: unknown }).manifest
+        : rawBody;
+    const parsed = captureManifestSchema.safeParse(manifestCandidate);
     if (!parsed.success) {
       throw new UiIntelligenceError("SCHEMA_INVALID", "invalid capture manifest", {
         httpStatus: 422,

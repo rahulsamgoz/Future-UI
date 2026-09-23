@@ -231,16 +231,19 @@ export function Editor() {
     }
   }
 
-  // --- History (optional remote service) ---
+  // --- History (local proxy or remote service) ---
   async function loadHistory() {
-    if (!apiBaseUrl) {
-      setHistory(["History service not configured (set VITE_API_BASE). Local operation continues without it."]);
-      return;
-    }
     try {
-      const res = await fetch(`${apiBaseUrl}/v1/projects/reference-app/entities/by-key/${selected?.contract.entityKey ?? "catalog.productChooser"}/history`, {
-        headers: { Authorization: `Bearer ${import.meta.env.VITE_API_TOKEN ?? "dev-token"}` },
-      });
+      const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
+      // Same-origin /v1 goes through the dev-server proxy; an absolute
+      // VITE_API_BASE overrides it (tests, custom deployments).
+      const base = apiBaseUrl ?? "";
+      const res = await fetch(
+        `${base}/v1/projects/reference-app/entities/${encodeURIComponent(selected?.contract.entityKey ?? "catalog.productChooser")}/history?access_token=${encodeURIComponent(token)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const page = (await res.json()) as { observations: Array<{ captureId: string; evidenceLabel: string; commitSha: string; capturedAt: string; summary: string }> };
       setHistory(page.observations);

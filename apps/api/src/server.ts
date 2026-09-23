@@ -42,6 +42,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   registerAuthAndErrors(app, { token });
 
+  // Canonicalize the project URL identifier: accept the stored project id or
+  // the project name (e.g. "reference-app" → "proj_reference_app") so every
+  // route and its foreign keys see the same id. Runs after auth.
+  app.addHook("preHandler", async (request) => {
+    const params = request.params as { p?: string } | undefined;
+    if (params?.p) {
+      const row = (await db)
+        .prepare("SELECT id FROM projects WHERE id = ? OR name = ?")
+        .get(params.p, params.p) as { id: string } | undefined;
+      if (row) params.p = row.id;
+    }
+  });
+
   const indexCache = new LexicalIndexCache(db);
 
   await app.register(projectRoutes, { db });
