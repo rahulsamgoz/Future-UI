@@ -1,17 +1,26 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
     "noEmit": true,
-    "declaration": false,
-    "declarationMap": false,
-    "composite": true,
     "jsx": "react-jsx",
-    "types": [
-      "vite/client"
-    ]
+    "types": ["vite/client"],
+    "paths": {
+      "@ui-intelligence/protocol": ["../../packages/protocol/src/index.ts"],
+      "@ui-intelligence/runtime-core": ["../../packages/runtime-core/src/index.ts"],
+      "@ui-intelligence/preferences": ["../../packages/preferences/src/index.ts"],
+      "@ui-intelligence/react": ["../../packages/react/src/index.ts"],
+      "@ui-intelligence/renderers": ["../../packages/renderers/src/index.ts"],
+      "@ui-intelligence/vite": ["../../packages/vite/src/index.ts"],
+      "@ui-intelligence/agent": ["../../packages/agent/src/index.ts"]
+    }
   },
-  "include": [
-    "src",
-    "vite.config.ts"
-  ]
+  "include": ["src", "test", "vite.config.ts"]
 }
