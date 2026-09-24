@@ -10,7 +10,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run --root ../.."
+    "test": "vitest run --root ../..",
+    "start": "node dist/main.js",
+    "dev": "tsc -b && node dist/main.js"
   },
   "dependencies": {
     "@ui-intelligence/protocol": "1.0.0",

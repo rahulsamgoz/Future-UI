@@ -20,13 +20,13 @@ export const presentationSchema = z.object({
 });
 export type Presentation = z.infer<typeof presentationSchema>;
 
-export const layoutNodeSchema: z.ZodType<LayoutNode> = z.lazy(() =>
+export const layoutNodeSchema: z.ZodType<LayoutNode, z.ZodTypeDef, unknown> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("layout"),
       nodeId: z.string().min(1),
       type: z.enum(["stack@1", "grid@1", "split@1"]),
-      properties: z.record(z.unknown()).default({}),
+      properties: z.record(z.custom<JsonValue>(() => true)).default({}),
       children: z.array(layoutNodeSchema),
     }),
     z.object({
