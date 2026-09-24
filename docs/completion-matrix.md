@@ -62,7 +62,7 @@ This file is updated as work completes. Evidence must be actual execution, not i
 | Uploader retry/backoff (capture#11) | fixed — fetchWithRetry: 3 attempts, 250ms×2ⁿ backoff, retries network errors/5xx/429 only; PUT retries same slot URL; zero-artifact manifest fails fast (uploader.test.ts) |
 | Validator checkedInvariants bookkeeping (core#9) | fixed — schema-failure early return reports ["schema"] only; locked_regions declared in validatePageLayout checked list; empty compatibleRenderers documented as unrestricted |
 | Logical-parent selection for repeated instances (capture#15) | fixed — findLogicalParent prefers the tracked instance whose node contains the child in the DOM, falls back to latest (ui-boundary.test.tsx) |
-| Capture readiness: default scenario recorded empty-state text | todo (new finding) |
+| Capture readiness: default scenario recorded empty-state text | fixed — root cause was occurrence-row overwrite across same-page captures, not readiness; rows now capture-scoped with regression test; all 6 scenarios verified capturing correct per-state text 2026-09-24 |
 
 ## Known dev-profile boundaries (accepted, documented)
 
