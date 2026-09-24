@@ -87,11 +87,15 @@ describeE2E("historical onboarding journey (live API)", () => {
   });
 
   it("syncs fixture commits to the API (commits:sync)", async () => {
-    const commits = [...fixtureCommits.map((c) => ({ sha: c.sha, committedAt: c.date, parents: c.parents })), {
-      sha: repoHead.sha,
-      committedAt: repoHead.committedAt,
-      parents: repoHead.parents,
-    }];
+    const commits = [
+      ...fixtureCommits.map((c) => ({ sha: c.sha, committedAt: c.date, parents: c.parents })),
+      {
+        sha: repoHead.sha,
+        // INSERT OR REPLACE: pin the current-build commit inside the scan window.
+        committedAt: new Date().toISOString(),
+        parents: repoHead.parents,
+      },
+    ];
     const result = await apiRequest(API, TOKEN, "POST", `/v1/projects/${PROJECT}/commits:sync`, { body: { commits } });
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ stored: commits.length });
@@ -113,7 +117,11 @@ describeE2E("historical onboarding journey (live API)", () => {
       const { manifest, screenshotBytes } = await runner.execute(recipe, {
         projectId: PROJECT,
         commitSha: repoHead.sha,
-        buildArtifactDigest: "local-dev",
+        // Per-run build digest: a re-run of this journey is a NEW build
+        // observation (fresh capture timestamps/bounds), not a retry of the
+        // same manifest. A stable digest would collide with the previous
+        // run's request key and correctly 409 IDEMPOTENCY_MISMATCH.
+        buildArtifactDigest: `local-dev-${process.env.VITEST_POOL_ID ?? "0"}-${Date.now()}`,
         environment,
       });
       // Idempotent by request key: re-running the journey replays, not duplicates.
@@ -130,24 +138,32 @@ describeE2E("historical onboarding journey (live API)", () => {
   }, 120_000);
 
   it("creates a history plan and reviews the estimate fields", async () => {
-    const input = {
-      repository: "fixtures/history (synthetic corpus)",
-      branches: ["main"],
-      windowStart: "2026-09-24T00:00:00Z",
-      windowEnd: "2026-09-26T00:00:00Z",
-      scenarioIds: SCENARIO_IDS,
-      maxBuilds: 12,
-      renderBudgetMs: 600_000,
-      timezone: "UTC",
-    };
-    const result = await apiRequest(API, TOKEN, "POST", `/v1/projects/${PROJECT}/history-plans`, { body: { input } });
+    // Narrow window around the current build (synced above), on the live API
+    // the shared dev DB may contain other recent commits — assert our commit
+    // is selected, newest first, and that the estimate is consistent.
+    const windowStart = new Date(Date.now() - 60_000).toISOString();
+    const windowEnd = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const result = await apiRequest(API, TOKEN, "POST", `/v1/projects/${PROJECT}/history-plans`, {
+      body: {
+        input: {
+          repository: "fixtures/history (synthetic corpus)",
+          branches: ["main"],
+          windowStart,
+          windowEnd,
+          scenarioIds: SCENARIO_IDS,
+          maxBuilds: 12,
+          renderBudgetMs: 600_000,
+          timezone: "UTC",
+        },
+      },
+    });
     expect(result.status).toBe(201);
     const plan = result.body as Record<string, unknown>;
-    expect(Array.isArray(plan.selectedCommits)).toBe(true);
-    expect((plan.selectedCommits as Array<Record<string, unknown>>).length).toBe(1); // repo HEAD only
-    expect((plan.selectedCommits as Array<Record<string, unknown>>)[0].commitSha).toBe(repoHead.sha);
+    const selected = plan.selectedCommits as Array<Record<string, unknown>>;
+    expect(Array.isArray(selected)).toBe(true);
+    expect(selected.map((c) => c.commitSha)).toContain(repoHead.sha);
     expect(typeof plan.estimatedCaptures).toBe("number");
-    expect((plan.estimatedCaptures as number) as number).toBe(1 * SCENARIO_IDS.length * 2);
+    expect(plan.estimatedCaptures as number).toBe(selected.length * SCENARIO_IDS.length * 2);
     const range = plan.uncertaintyRange as [number, number];
     expect(range[0]).toBeLessThanOrEqual(plan.estimatedCaptures as number);
     expect(range[1]).toBeGreaterThanOrEqual(plan.estimatedCaptures as number);
@@ -156,13 +172,15 @@ describeE2E("historical onboarding journey (live API)", () => {
   });
 
   it("executes the scan and the job completes with the plan marked completed", async () => {
+    const windowStart = new Date(Date.now() - 60_000).toISOString();
+    const windowEnd = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const plans = await apiRequest(API, TOKEN, "POST", `/v1/projects/${PROJECT}/history-plans`, {
       body: {
         input: {
           repository: "fixtures/history (synthetic corpus)",
           branches: ["main"],
-          windowStart: "2026-09-24T00:00:00Z",
-          windowEnd: "2026-09-26T00:00:00Z",
+          windowStart,
+          windowEnd,
           scenarioIds: SCENARIO_IDS,
           maxBuilds: 12,
           renderBudgetMs: 600_000,
@@ -208,7 +226,10 @@ describeE2E("historical onboarding journey (live API)", () => {
     expect(extended.status).toBe(201);
     const plan = extended.body as Record<string, unknown>;
     const selected = plan.selectedCommits as Array<Record<string, unknown>>;
-    expect(selected.length).toBe(14); // 13 fixture commits + current build HEAD
+    const selectedShas = new Set(selected.map((c) => c.commitSha as string));
+    expect(selected.length).toBeGreaterThanOrEqual(14); // 13 fixture commits + current build HEAD
+    for (const commit of fixtureCommits) expect(selectedShas.has(commit.sha)).toBe(true);
+    expect(selectedShas.has(repoHead.sha)).toBe(true);
     const planId = plan.planId as string;
 
     const started = await apiRequest(API, TOKEN, "POST", `/v1/projects/${PROJECT}/history-plans/${planId}/runs`);
@@ -225,8 +246,14 @@ describeE2E("historical onboarding journey (live API)", () => {
       const beforeCount = headCapturesBefore.find((c) => c.scenarioId === capture.scenarioId)?.observationCount;
       expect(capture.observationCount).toBe(beforeCount); // re-index did not duplicate
     }
-    const keys = new Set(after.map((c) => `${c.commitSha}:${c.scenarioId}`));
-    expect(keys.size).toBe(after.length);
+    // Uniqueness is per (build, scenario) — the same commit can legitimately
+    // hold captures from multiple builds (coverage run vs this run), so
+    // commit+scenario is NOT the right composite. Capture ids must all be
+    // distinct rows and no capture row was re-created by the re-scan.
+    const ids = new Set(after.map((c) => c.captureId));
+    expect(ids.size).toBe(after.length);
+    const beforeIds = new Set(before.map((c) => c.captureId));
+    for (const id of ids) expect(beforeIds.has(id)).toBe(true); // same rows, none re-ingested
   }, 120_000);
 
   it("returns observations and gaps for catalog.productChooser history", async () => {

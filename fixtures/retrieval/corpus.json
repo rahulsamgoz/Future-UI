@@ -1,0 +1,1180 @@
+{
+  "version": 1,
+  "frozenAt": "2026-09-24",
+  "description": "Frozen retrieval evaluation corpus (spec section 19). Regenerate with: node fixtures/retrieval/generate-corpus.mjs",
+  "entities": [
+    {
+      "entityKey": "catalog.productChooser",
+      "anchors": [
+        "catalog.productChooser"
+      ],
+      "observations": [
+        "Product chooser",
+        "Featured products this week",
+        "Browse the full catalog"
+      ]
+    },
+    {
+      "entityKey": "catalog.sortControl",
+      "anchors": [
+        "catalog.sortControl"
+      ],
+      "observations": [
+        "Sort products",
+        "Sort by price, low to high",
+        "Newest arrivals first"
+      ]
+    },
+    {
+      "entityKey": "catalog.filterPanel",
+      "anchors": [
+        "catalog.filterPanel"
+      ],
+      "observations": [
+        "Filters",
+        "Only in-stock items",
+        "Refine results by brand"
+      ]
+    },
+    {
+      "entityKey": "catalog.searchBar",
+      "anchors": [
+        "catalog.searchBar"
+      ],
+      "observations": [
+        "Search products",
+        "Search the catalog",
+        "What are you looking for?"
+      ]
+    },
+    {
+      "entityKey": "catalog.pagination",
+      "anchors": [
+        "catalog.pagination"
+      ],
+      "observations": [
+        "Next page",
+        "Page 2 of 8",
+        "Showing 24 of 187 products"
+      ]
+    },
+    {
+      "entityKey": "catalog.productCard",
+      "anchors": [
+        "catalog.productCard"
+      ],
+      "observations": [
+        "Product details and price",
+        "View full details",
+        "Rated 4.5 by 231 customers"
+      ]
+    },
+    {
+      "entityKey": "catalog.compareTray",
+      "anchors": [
+        "catalog.compareTray"
+      ],
+      "observations": [
+        "Compare products",
+        "Compare up to 4 products",
+        "Clear comparison"
+      ]
+    },
+    {
+      "entityKey": "catalog.wishlistButton",
+      "anchors": [
+        "catalog.wishlistButton"
+      ],
+      "observations": [
+        "Save for later",
+        "Add to wishlist",
+        "Saved to your wishlist"
+      ]
+    },
+    {
+      "entityKey": "cart.addButton",
+      "anchors": [
+        "cart.addButton"
+      ],
+      "observations": [
+        "Add to cart",
+        "Add this product to your cart",
+        "Added to cart"
+      ]
+    },
+    {
+      "entityKey": "cart.lineItemRow",
+      "anchors": [
+        "cart.lineItemRow"
+      ],
+      "observations": [
+        "Add to cart item",
+        "Remove item",
+        "Qty: 2"
+      ]
+    },
+    {
+      "entityKey": "cart.miniCart",
+      "anchors": [
+        "cart.miniCart"
+      ],
+      "observations": [
+        "Your cart",
+        "2 items in your cart",
+        "View cart and checkout"
+      ]
+    },
+    {
+      "entityKey": "cart.checkoutSummary",
+      "anchors": [
+        "cart.checkoutSummary"
+      ],
+      "observations": [
+        "Order summary",
+        "Checkout now",
+        "Total due today"
+      ]
+    },
+    {
+      "entityKey": "cart.promoCodeField",
+      "anchors": [
+        "cart.promoCodeField"
+      ],
+      "observations": [
+        "Promo code",
+        "Enter a discount code",
+        "Apply coupon"
+      ]
+    },
+    {
+      "entityKey": "cart.shippingOptions",
+      "anchors": [
+        "cart.shippingOptions"
+      ],
+      "observations": [
+        "Shipping options",
+        "Standard delivery, 3-5 days",
+        "Express delivery, tomorrow"
+      ]
+    },
+    {
+      "entityKey": "account.profileForm",
+      "anchors": [
+        "account.profileForm"
+      ],
+      "observations": [
+        "Profile settings",
+        "Display name",
+        "Save profile changes"
+      ]
+    },
+    {
+      "entityKey": "account.loginForm",
+      "anchors": [
+        "account.loginForm"
+      ],
+      "observations": [
+        "Sign in",
+        "Forgot your password?",
+        "Keep me signed in"
+      ]
+    },
+    {
+      "entityKey": "account.passwordForm",
+      "anchors": [
+        "account.passwordForm"
+      ],
+      "observations": [
+        "Change password",
+        "Current password",
+        "New password must differ from the old one"
+      ]
+    },
+    {
+      "entityKey": "account.emailPrefs",
+      "anchors": [
+        "account.emailPrefs"
+      ],
+      "observations": [
+        "Email preferences",
+        "Weekly digest",
+        "Unsubscribe from marketing emails"
+      ]
+    },
+    {
+      "entityKey": "account.addressBook",
+      "anchors": [
+        "account.addressBook"
+      ],
+      "observations": [
+        "Address book",
+        "Add a new address",
+        "Default shipping address"
+      ]
+    },
+    {
+      "entityKey": "account.sessionsList",
+      "anchors": [
+        "account.sessionsList"
+      ],
+      "observations": [
+        "Active sessions",
+        "Sign out of all devices",
+        "Last signed in from Chrome"
+      ]
+    },
+    {
+      "entityKey": "orders.orderList",
+      "anchors": [
+        "orders.orderList"
+      ],
+      "observations": [
+        "Your orders",
+        "Order #4821",
+        "Placed on August 4"
+      ]
+    },
+    {
+      "entityKey": "orders.orderDetail",
+      "anchors": [
+        "orders.orderDetail"
+      ],
+      "observations": [
+        "Order details",
+        "Items in this order",
+        "Payment method: card ending 4242"
+      ]
+    },
+    {
+      "entityKey": "orders.refundForm",
+      "anchors": [
+        "orders.refundForm"
+      ],
+      "observations": [
+        "Request a refund",
+        "Refund reason",
+        "Refunds process in 5 business days"
+      ]
+    },
+    {
+      "entityKey": "orders.trackingPanel",
+      "anchors": [
+        "orders.trackingPanel"
+      ],
+      "observations": [
+        "Package tracking",
+        "Shipped via Globex",
+        "Arriving Thursday"
+      ]
+    },
+    {
+      "entityKey": "orders.invoiceDownload",
+      "anchors": [
+        "orders.invoiceDownload"
+      ],
+      "observations": [
+        "Download invoice",
+        "Invoice PDF",
+        "Tax invoice for order #4821"
+      ]
+    },
+    {
+      "entityKey": "settings.themePicker",
+      "anchors": [
+        "settings.themePicker"
+      ],
+      "observations": [
+        "Appearance settings",
+        "Dark mode",
+        "Light or system theme"
+      ]
+    },
+    {
+      "entityKey": "settings.languageMenu",
+      "anchors": [
+        "settings.languageMenu"
+      ],
+      "observations": [
+        "Language",
+        "Español",
+        "Region and language"
+      ]
+    },
+    {
+      "entityKey": "settings.notificationPanel",
+      "anchors": [
+        "settings.notificationPanel"
+      ],
+      "observations": [
+        "Notification settings",
+        "Mute all alerts",
+        "Push notifications"
+      ]
+    },
+    {
+      "entityKey": "settings.privacyControls",
+      "anchors": [
+        "settings.privacyControls"
+      ],
+      "observations": [
+        "Privacy controls",
+        "Manage cookies",
+        "Do not sell my data"
+      ]
+    },
+    {
+      "entityKey": "settings.dataExport",
+      "anchors": [
+        "settings.dataExport"
+      ],
+      "observations": [
+        "Export your data",
+        "Download a copy of your data",
+        "Export format: JSON"
+      ]
+    },
+    {
+      "entityKey": "nav.mainMenu",
+      "anchors": [
+        "nav.mainMenu"
+      ],
+      "observations": [
+        "Main menu",
+        "Home",
+        "All departments"
+      ]
+    },
+    {
+      "entityKey": "nav.breadcrumbTrail",
+      "anchors": [
+        "nav.breadcrumbTrail"
+      ],
+      "observations": [
+        "Home / Catalog / Shoes",
+        "Breadcrumb trail",
+        "Back one level"
+      ]
+    },
+    {
+      "entityKey": "nav.footerLinks",
+      "anchors": [
+        "nav.footerLinks"
+      ],
+      "observations": [
+        "Footer",
+        "Terms of service",
+        "Privacy policy"
+      ]
+    },
+    {
+      "entityKey": "nav.regionSwitcher",
+      "anchors": [
+        "nav.regionSwitcher"
+      ],
+      "observations": [
+        "Choose your country",
+        "Shipping country",
+        "Region: EU"
+      ]
+    },
+    {
+      "entityKey": "content.articleBody",
+      "anchors": [
+        "content.articleBody"
+      ],
+      "observations": [
+        "Article body",
+        "Published on September 2",
+        "5 minute read"
+      ]
+    },
+    {
+      "entityKey": "content.commentThread",
+      "anchors": [
+        "content.commentThread"
+      ],
+      "observations": [
+        "Comments",
+        "Share what you think",
+        "12 replies"
+      ]
+    },
+    {
+      "entityKey": "content.ratingStars",
+      "anchors": [
+        "content.ratingStars"
+      ],
+      "observations": [
+        "Rated 4.5 out of 5",
+        "231 ratings",
+        "Write a review"
+      ]
+    },
+    {
+      "entityKey": "content.mediaGallery",
+      "anchors": [
+        "content.mediaGallery"
+      ],
+      "observations": [
+        "Product photos",
+        "Zoom the image",
+        "12 photos"
+      ]
+    },
+    {
+      "entityKey": "content.videoPlayer",
+      "anchors": [
+        "content.videoPlayer"
+      ],
+      "observations": [
+        "Product video",
+        "Play the demo",
+        "Closed captions available"
+      ]
+    },
+    {
+      "entityKey": "dashboard.statsPanel",
+      "anchors": [
+        "dashboard.statsPanel"
+      ],
+      "observations": [
+        "Sales this week",
+        "Revenue is up 12%",
+        "Conversion rate 3.4%"
+      ]
+    },
+    {
+      "entityKey": "dashboard.activityFeed",
+      "anchors": [
+        "dashboard.activityFeed"
+      ],
+      "observations": [
+        "Recent activity",
+        "You updated pricing 2 hours ago",
+        "View all activity"
+      ]
+    },
+    {
+      "entityKey": "dashboard.quickActions",
+      "anchors": [
+        "dashboard.quickActions"
+      ],
+      "observations": [
+        "Quick actions",
+        "Create a new product",
+        "Duplicate last week's campaign"
+      ]
+    },
+    {
+      "entityKey": "support.helpCenter",
+      "anchors": [
+        "support.helpCenter"
+      ],
+      "observations": [
+        "Help center",
+        "How can we help?",
+        "Browse popular articles"
+      ]
+    },
+    {
+      "entityKey": "support.contactForm",
+      "anchors": [
+        "support.contactForm"
+      ],
+      "observations": [
+        "Contact support",
+        "Start a chat",
+        "We reply within one business day"
+      ]
+    },
+    {
+      "entityKey": "admin.userTable",
+      "anchors": [
+        "admin.userTable"
+      ],
+      "observations": [
+        "User management",
+        "482 active users",
+        "Invite a teammate"
+      ]
+    },
+    {
+      "entityKey": "admin.roleEditor",
+      "anchors": [
+        "admin.roleEditor"
+      ],
+      "observations": [
+        "Roles and permissions",
+        "Grant admin access",
+        "Editor role"
+      ]
+    },
+    {
+      "entityKey": "admin.auditLog",
+      "anchors": [
+        "admin.auditLog"
+      ],
+      "observations": [
+        "Audit log",
+        "Who changed what",
+        "Export the log as CSV"
+      ]
+    },
+    {
+      "entityKey": "app.region1",
+      "anchors": [
+        "app.region1"
+      ],
+      "observations": [
+        "Announcement banner",
+        "Free shipping on orders over 50",
+        "Limited time offer"
+      ]
+    },
+    {
+      "entityKey": "app.region2",
+      "anchors": [
+        "app.region2"
+      ],
+      "observations": [
+        "Newsletter signup",
+        "Subscribe to our newsletter",
+        "Get 10% off your first order"
+      ]
+    },
+    {
+      "entityKey": "app.region3",
+      "anchors": [
+        "app.region3"
+      ],
+      "observations": [
+        "Store locator",
+        "Find a store near you",
+        "Open until 9 pm"
+      ]
+    },
+    {
+      "entityKey": "app.region4",
+      "anchors": [
+        "app.region4"
+      ],
+      "observations": [
+        "Gift cards",
+        "Check your gift card balance",
+        "Redeem a gift card"
+      ]
+    },
+    {
+      "entityKey": "app.region5",
+      "anchors": [
+        "app.region5"
+      ],
+      "observations": [
+        "Loyalty program",
+        "Join the rewards club",
+        "You have 240 points"
+      ]
+    },
+    {
+      "entityKey": "app.region6",
+      "anchors": [
+        "app.region6"
+      ],
+      "observations": [
+        "Sustainability",
+        "Our climate pledge",
+        "Carbon neutral since 2024"
+      ]
+    }
+  ],
+  "knownTargetQueries": [
+    {
+      "text": "Product chooser",
+      "expectedEntityKey": "catalog.productChooser"
+    },
+    {
+      "text": "Sort products",
+      "expectedEntityKey": "catalog.sortControl"
+    },
+    {
+      "text": "Filters",
+      "expectedEntityKey": "catalog.filterPanel"
+    },
+    {
+      "text": "Search products",
+      "expectedEntityKey": "catalog.searchBar"
+    },
+    {
+      "text": "Next page",
+      "expectedEntityKey": "catalog.pagination"
+    },
+    {
+      "text": "Product details and price",
+      "expectedEntityKey": "catalog.productCard"
+    },
+    {
+      "text": "Compare products",
+      "expectedEntityKey": "catalog.compareTray"
+    },
+    {
+      "text": "Save for later",
+      "expectedEntityKey": "catalog.wishlistButton"
+    },
+    {
+      "text": "Add to cart",
+      "expectedEntityKey": "cart.addButton"
+    },
+    {
+      "text": "Add to cart item",
+      "expectedEntityKey": "cart.lineItemRow"
+    },
+    {
+      "text": "Your cart",
+      "expectedEntityKey": "cart.miniCart"
+    },
+    {
+      "text": "Order summary",
+      "expectedEntityKey": "cart.checkoutSummary"
+    },
+    {
+      "text": "Promo code",
+      "expectedEntityKey": "cart.promoCodeField"
+    },
+    {
+      "text": "Shipping options",
+      "expectedEntityKey": "cart.shippingOptions"
+    },
+    {
+      "text": "Profile settings",
+      "expectedEntityKey": "account.profileForm"
+    },
+    {
+      "text": "Sign in",
+      "expectedEntityKey": "account.loginForm"
+    },
+    {
+      "text": "Change password",
+      "expectedEntityKey": "account.passwordForm"
+    },
+    {
+      "text": "Email preferences",
+      "expectedEntityKey": "account.emailPrefs"
+    },
+    {
+      "text": "Address book",
+      "expectedEntityKey": "account.addressBook"
+    },
+    {
+      "text": "Active sessions",
+      "expectedEntityKey": "account.sessionsList"
+    },
+    {
+      "text": "Your orders",
+      "expectedEntityKey": "orders.orderList"
+    },
+    {
+      "text": "Order details",
+      "expectedEntityKey": "orders.orderDetail"
+    },
+    {
+      "text": "Request a refund",
+      "expectedEntityKey": "orders.refundForm"
+    },
+    {
+      "text": "Package tracking",
+      "expectedEntityKey": "orders.trackingPanel"
+    },
+    {
+      "text": "Download invoice",
+      "expectedEntityKey": "orders.invoiceDownload"
+    },
+    {
+      "text": "Appearance settings",
+      "expectedEntityKey": "settings.themePicker"
+    },
+    {
+      "text": "Language",
+      "expectedEntityKey": "settings.languageMenu"
+    },
+    {
+      "text": "Notification settings",
+      "expectedEntityKey": "settings.notificationPanel"
+    },
+    {
+      "text": "Privacy controls",
+      "expectedEntityKey": "settings.privacyControls"
+    },
+    {
+      "text": "Export your data",
+      "expectedEntityKey": "settings.dataExport"
+    },
+    {
+      "text": "Main menu",
+      "expectedEntityKey": "nav.mainMenu"
+    },
+    {
+      "text": "Home / Catalog / Shoes",
+      "expectedEntityKey": "nav.breadcrumbTrail"
+    },
+    {
+      "text": "Footer",
+      "expectedEntityKey": "nav.footerLinks"
+    },
+    {
+      "text": "Choose your country",
+      "expectedEntityKey": "nav.regionSwitcher"
+    },
+    {
+      "text": "Article body",
+      "expectedEntityKey": "content.articleBody"
+    },
+    {
+      "text": "Comments",
+      "expectedEntityKey": "content.commentThread"
+    },
+    {
+      "text": "Rated 4.5 out of 5",
+      "expectedEntityKey": "content.ratingStars"
+    },
+    {
+      "text": "Product photos",
+      "expectedEntityKey": "content.mediaGallery"
+    },
+    {
+      "text": "Product video",
+      "expectedEntityKey": "content.videoPlayer"
+    },
+    {
+      "text": "Sales this week",
+      "expectedEntityKey": "dashboard.statsPanel"
+    },
+    {
+      "text": "Recent activity",
+      "expectedEntityKey": "dashboard.activityFeed"
+    },
+    {
+      "text": "Quick actions",
+      "expectedEntityKey": "dashboard.quickActions"
+    },
+    {
+      "text": "Help center",
+      "expectedEntityKey": "support.helpCenter"
+    },
+    {
+      "text": "Contact support",
+      "expectedEntityKey": "support.contactForm"
+    },
+    {
+      "text": "User management",
+      "expectedEntityKey": "admin.userTable"
+    },
+    {
+      "text": "Roles and permissions",
+      "expectedEntityKey": "admin.roleEditor"
+    },
+    {
+      "text": "Audit log",
+      "expectedEntityKey": "admin.auditLog"
+    },
+    {
+      "text": "Announcement banner",
+      "expectedEntityKey": "app.region1"
+    },
+    {
+      "text": "Newsletter signup",
+      "expectedEntityKey": "app.region2"
+    },
+    {
+      "text": "Store locator",
+      "expectedEntityKey": "app.region3"
+    },
+    {
+      "text": "Gift cards",
+      "expectedEntityKey": "app.region4"
+    },
+    {
+      "text": "Loyalty program",
+      "expectedEntityKey": "app.region5"
+    },
+    {
+      "text": "Sustainability",
+      "expectedEntityKey": "app.region6"
+    },
+    {
+      "text": "featured products",
+      "expectedEntityKey": "catalog.productChooser"
+    },
+    {
+      "text": "price, low to high",
+      "expectedEntityKey": "catalog.sortControl"
+    },
+    {
+      "text": "refine results",
+      "expectedEntityKey": "catalog.filterPanel"
+    },
+    {
+      "text": "search the catalog",
+      "expectedEntityKey": "catalog.searchBar"
+    },
+    {
+      "text": "page 2 of 8",
+      "expectedEntityKey": "catalog.pagination"
+    },
+    {
+      "text": "view full details",
+      "expectedEntityKey": "catalog.productCard"
+    },
+    {
+      "text": "clear comparison",
+      "expectedEntityKey": "catalog.compareTray"
+    },
+    {
+      "text": "add to wishlist",
+      "expectedEntityKey": "catalog.wishlistButton"
+    },
+    {
+      "text": "add this product to your cart",
+      "expectedEntityKey": "cart.addButton"
+    },
+    {
+      "text": "remove item",
+      "expectedEntityKey": "cart.lineItemRow"
+    },
+    {
+      "text": "2 items in your cart",
+      "expectedEntityKey": "cart.miniCart"
+    },
+    {
+      "text": "checkout now",
+      "expectedEntityKey": "cart.checkoutSummary"
+    },
+    {
+      "text": "enter a discount code",
+      "expectedEntityKey": "cart.promoCodeField"
+    },
+    {
+      "text": "standard delivery 3-5 days",
+      "expectedEntityKey": "cart.shippingOptions"
+    },
+    {
+      "text": "display name",
+      "expectedEntityKey": "account.profileForm"
+    },
+    {
+      "text": "forgot your password",
+      "expectedEntityKey": "account.loginForm"
+    },
+    {
+      "text": "current password",
+      "expectedEntityKey": "account.passwordForm"
+    },
+    {
+      "text": "weekly digest",
+      "expectedEntityKey": "account.emailPrefs"
+    },
+    {
+      "text": "add a new address",
+      "expectedEntityKey": "account.addressBook"
+    },
+    {
+      "text": "sign out of all devices",
+      "expectedEntityKey": "account.sessionsList"
+    },
+    {
+      "text": "order 4821",
+      "expectedEntityKey": "orders.orderList"
+    },
+    {
+      "text": "items in this order",
+      "expectedEntityKey": "orders.orderDetail"
+    },
+    {
+      "text": "refund reason",
+      "expectedEntityKey": "orders.refundForm"
+    },
+    {
+      "text": "shipped via globex",
+      "expectedEntityKey": "orders.trackingPanel"
+    },
+    {
+      "text": "invoice pdf",
+      "expectedEntityKey": "orders.invoiceDownload"
+    },
+    {
+      "text": "dark mode",
+      "expectedEntityKey": "settings.themePicker"
+    },
+    {
+      "text": "region and language",
+      "expectedEntityKey": "settings.languageMenu"
+    },
+    {
+      "text": "mute all alerts",
+      "expectedEntityKey": "settings.notificationPanel"
+    },
+    {
+      "text": "manage cookies",
+      "expectedEntityKey": "settings.privacyControls"
+    },
+    {
+      "text": "download a copy of your data",
+      "expectedEntityKey": "settings.dataExport"
+    },
+    {
+      "text": "all departments",
+      "expectedEntityKey": "nav.mainMenu"
+    },
+    {
+      "text": "home catalog shoes",
+      "expectedEntityKey": "nav.breadcrumbTrail"
+    },
+    {
+      "text": "privacy policy",
+      "expectedEntityKey": "nav.footerLinks"
+    },
+    {
+      "text": "shipping country",
+      "expectedEntityKey": "nav.regionSwitcher"
+    },
+    {
+      "text": "published on september 2",
+      "expectedEntityKey": "content.articleBody"
+    },
+    {
+      "text": "share what you think",
+      "expectedEntityKey": "content.commentThread"
+    },
+    {
+      "text": "231 ratings",
+      "expectedEntityKey": "content.ratingStars"
+    },
+    {
+      "text": "zoom the image",
+      "expectedEntityKey": "content.mediaGallery"
+    },
+    {
+      "text": "play the demo",
+      "expectedEntityKey": "content.videoPlayer"
+    },
+    {
+      "text": "revenue is up 12",
+      "expectedEntityKey": "dashboard.statsPanel"
+    },
+    {
+      "text": "you updated pricing 2 hours ago",
+      "expectedEntityKey": "dashboard.activityFeed"
+    },
+    {
+      "text": "create a new product",
+      "expectedEntityKey": "dashboard.quickActions"
+    },
+    {
+      "text": "how can we help",
+      "expectedEntityKey": "support.helpCenter"
+    },
+    {
+      "text": "start a chat",
+      "expectedEntityKey": "support.contactForm"
+    },
+    {
+      "text": "482 active users",
+      "expectedEntityKey": "admin.userTable"
+    },
+    {
+      "text": "grant admin access",
+      "expectedEntityKey": "admin.roleEditor"
+    },
+    {
+      "text": "export the log as csv",
+      "expectedEntityKey": "admin.auditLog"
+    }
+  ],
+  "ambiguousQueries": [
+    {
+      "text": "add to cart",
+      "expectedEntityKeys": [
+        "cart.addButton",
+        "cart.lineItemRow"
+      ]
+    },
+    {
+      "text": "cart",
+      "expectedEntityKeys": [
+        "cart.addButton",
+        "cart.miniCart",
+        "cart.lineItemRow"
+      ]
+    },
+    {
+      "text": "items in your cart",
+      "expectedEntityKeys": [
+        "cart.miniCart",
+        "cart.lineItemRow"
+      ]
+    },
+    {
+      "text": "checkout",
+      "expectedEntityKeys": [
+        "cart.checkoutSummary",
+        "cart.miniCart"
+      ]
+    },
+    {
+      "text": "password",
+      "expectedEntityKeys": [
+        "account.loginForm",
+        "account.passwordForm"
+      ]
+    },
+    {
+      "text": "sign",
+      "expectedEntityKeys": [
+        "account.loginForm",
+        "account.sessionsList"
+      ]
+    },
+    {
+      "text": "settings",
+      "expectedEntityKeys": [
+        "account.profileForm",
+        "settings.themePicker",
+        "settings.notificationPanel"
+      ]
+    },
+    {
+      "text": "order",
+      "expectedEntityKeys": [
+        "orders.orderList",
+        "orders.orderDetail",
+        "orders.invoiceDownload"
+      ]
+    },
+    {
+      "text": "order 4821",
+      "expectedEntityKeys": [
+        "orders.orderList",
+        "orders.invoiceDownload",
+        "admin.userTable"
+      ]
+    },
+    {
+      "text": "card",
+      "expectedEntityKeys": [
+        "app.region4",
+        "orders.orderDetail"
+      ]
+    },
+    {
+      "text": "shipping",
+      "expectedEntityKeys": [
+        "cart.shippingOptions",
+        "account.addressBook",
+        "nav.regionSwitcher"
+      ]
+    },
+    {
+      "text": "product",
+      "expectedEntityKeys": [
+        "catalog.productChooser",
+        "catalog.productCard",
+        "content.mediaGallery",
+        "content.videoPlayer"
+      ]
+    },
+    {
+      "text": "price",
+      "expectedEntityKeys": [
+        "catalog.sortControl",
+        "catalog.productCard"
+      ]
+    },
+    {
+      "text": "view",
+      "expectedEntityKeys": [
+        "catalog.productCard",
+        "cart.miniCart",
+        "dashboard.activityFeed"
+      ]
+    },
+    {
+      "text": "export",
+      "expectedEntityKeys": [
+        "settings.dataExport",
+        "admin.auditLog"
+      ]
+    },
+    {
+      "text": "your data",
+      "expectedEntityKeys": [
+        "settings.dataExport",
+        "settings.privacyControls"
+      ]
+    },
+    {
+      "text": "home",
+      "expectedEntityKeys": [
+        "nav.mainMenu",
+        "nav.breadcrumbTrail"
+      ]
+    },
+    {
+      "text": "region",
+      "expectedEntityKeys": [
+        "nav.regionSwitcher",
+        "settings.languageMenu"
+      ]
+    },
+    {
+      "text": "active",
+      "expectedEntityKeys": [
+        "admin.userTable",
+        "account.sessionsList"
+      ]
+    },
+    {
+      "text": "12",
+      "expectedEntityKeys": [
+        "content.mediaGallery",
+        "content.commentThread"
+      ]
+    }
+  ],
+  "noMatchQueries": [
+    {
+      "text": "quarterly budget spreadsheet"
+    },
+    {
+      "text": "weather forecast for berlin"
+    },
+    {
+      "text": "banana bread recipe"
+    },
+    {
+      "text": "flight arrival status"
+    },
+    {
+      "text": "schedule a dentist appointment"
+    },
+    {
+      "text": "mortgage interest calculator"
+    },
+    {
+      "text": "adopt a rescue dog"
+    },
+    {
+      "text": "translate spanish to french"
+    },
+    {
+      "text": "live sports scores"
+    },
+    {
+      "text": "movie showtimes tonight"
+    },
+    {
+      "text": "recover deleted files"
+    },
+    {
+      "text": "parking permit renewal"
+    }
+  ]
+}

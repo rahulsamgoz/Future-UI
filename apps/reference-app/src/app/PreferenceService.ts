@@ -221,6 +221,9 @@ export class PreferenceService {
     const scopeKey = key.scopeKey;
     if (pref?.activeSpecificationDigest) {
       const spec = await this.store.getSpecification(pref.activeSpecificationDigest);
+      // Re-check after the second async hop: a profile switch may have
+      // cleared the live view while this read was in flight.
+      if (this.profileId !== profileAtStart) return;
       const presentation = (
         spec?.proposal as
           | { presentation?: { type?: string; properties?: Record<string, JsonValue> } }

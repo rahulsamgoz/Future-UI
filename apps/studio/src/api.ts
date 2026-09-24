@@ -100,6 +100,13 @@ export type ResolveResponseDto =
   | { status: "ambiguous"; candidates: Array<{ entityId: string; entityKey: string; score: number; explanation: string }> }
   | { status: "no_match"; reason: string };
 
+/** Copy a view into a standalone ArrayBuffer (crypto and fetch BodyInit need one). */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(out).set(bytes);
+  return out;
+}
+
 export class ApiClient {
   constructor(
     private readonly baseUrl: string = API_BASE,
@@ -170,10 +177,11 @@ export class ApiClient {
 
   /** Upload a PNG crop through the artifact slot flow, then ground it. */
   async groundScreenshot(projectId: string, bytes: Uint8Array): Promise<ResolveResponseDto> {
-    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    const buffer = toArrayBuffer(bytes);
+    const hash = await crypto.subtle.digest("SHA-256", buffer);
     const digest = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
     const slot = await this.createUploadSlot(projectId, "image/png", bytes.byteLength, digest);
-    const { artifactId } = await this.uploadArtifactBytes(slot.slotId, bytes);
+    const { artifactId } = await this.uploadArtifactBytes(slot.slotId, new Uint8Array(buffer));
     return this.resolveTarget(projectId, { kind: "screenshot", artifactId });
   }
 
@@ -189,7 +197,7 @@ export class ApiClient {
     return this.request(`/v1/artifacts/${encodeURIComponent(slotId)}`, {
       method: "PUT",
       headers: { "content-type": "application/octet-stream" },
-      body: bytes,
+      body: toArrayBuffer(bytes),
     });
   }
 
