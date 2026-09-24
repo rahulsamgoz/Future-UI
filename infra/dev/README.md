@@ -13,7 +13,7 @@ runner, and Studio console.
 | `UI_INTEL_STORE` | `./data/artifacts` | api (filesystem object store root) |
 | `UI_INTEL_SCHEMA` | `infra/dev/schema.sql` in the repo | index-worker (schema bootstrap) |
 | `PORT` | `8787` | api |
-| `UI_INTEL_MODEL_BASE_URL` / `UI_INTEL_MODEL_API_KEY` / `UI_INTEL_MODEL_NAME` | unset | agent provider selection: when all three are set the proposal worker uses the OpenAI-compatible provider; otherwise the deterministic provider is used. Easiest setup: put them in `infra/dev/model.env` (gitignored) — `start-all.sh` sources it automatically. Any OpenAI-compatible endpoint works (OpenCode Zen with a funded key, OpenRouter, OpenAI, a local vLLM/Ollama, ...). Note: Zen's `-free` models are restricted to the official OpenCode client and will not work through this API. |
+| `UI_INTEL_MODEL_BASE_URL` / `UI_INTEL_MODEL_API_KEY` / `UI_INTEL_MODEL_NAME` | unset | agent provider selection: when all three are set the proposal worker uses the OpenAI-compatible provider; otherwise the deterministic provider is used. Easiest setup: put them in `infra/dev/model.env` (gitignored) — `start-all.sh` sources it automatically. Any OpenAI-compatible endpoint works (OpenCode Zen with a funded key, OpenRouter, OpenAI, a local vLLM/Ollama, ...). Note: Zen's `-free` models are restricted to the official OpenCode client **except `space-bunny-free`**, which is served without client restrictions (zero-retention by design) and works directly through this API with `UI_INTEL_MODEL_API_KEY=public`. |
 | `VITE_API_BASE` | `http://localhost:8787` | studio |
 | `VITE_API_TOKEN` | `dev-token` | studio (dev profile only — never ship a token in a client bundle) |
 
