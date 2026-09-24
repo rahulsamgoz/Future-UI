@@ -15,3 +15,7 @@ artifacts-store/
 .vite/
 dist-private/
 infra/dev/model.env
+*.sqlite-shm
+*.sqlite-wal
+data/
+infra/dev/logs/
