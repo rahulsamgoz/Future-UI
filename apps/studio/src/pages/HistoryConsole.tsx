@@ -12,6 +12,28 @@ export function HistoryConsole({ client, projectId }: { client: ApiClient; proje
   const [selected, setSelected] = useState<ObservationDto[]>([]);
   const [screenshotUrls, setScreenshotUrls] = useState<Record<string, string>>({});
 
+  // Screenshot grounding (spec section 13): upload a crop, show the result.
+  const [groundResult, setGroundResult] = useState<string | null>(null);
+
+  async function groundScreenshot(file: File | undefined): Promise<void> {
+    if (!file) return;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await client.groundScreenshot(projectId, bytes);
+      if (result.status === "resolved") {
+        setGroundResult(`Grounded: resolved → ${result.entityKey}`);
+      } else if (result.status === "ambiguous") {
+        setGroundResult(
+          `Grounded: ambiguous — ${result.candidates.map((c) => c.entityKey).join(", ")}; select the intended region`
+        );
+      } else {
+        setGroundResult(`Grounded: no match — ${result.reason}`);
+      }
+    } catch (e) {
+      setGroundResult(`Ground screenshot failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   useEffect(() => {
     client.getRuntimeManifest(projectId).then((m) => {
       setManifest(m);
@@ -41,7 +63,7 @@ export function HistoryConsole({ client, projectId }: { client: ApiClient; proje
     if (!obs.screenshotArtifactId) return;
     if (screenshotUrls[obs.screenshotArtifactId]) return;
     try {
-      const blob = await client.fetchArtifactBlob(obs.screenshotArtifactId);
+      const blob = await client.fetchArtifactBlob(projectId, obs.screenshotArtifactId);
       setScreenshotUrls((urls) => ({ ...urls, [obs.screenshotArtifactId!]: URL.createObjectURL(blob) }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -75,6 +97,23 @@ export function HistoryConsole({ client, projectId }: { client: ApiClient; proje
             onChange={(e) => setScenario(e.target.value)}
           />
         </label>
+      </section>
+
+      <section className="panel">
+        <h2>Ground screenshot</h2>
+        <label className="field">
+          Upload a PNG crop:
+          <input
+            type="file"
+            accept="image/png"
+            data-testid="ground-upload"
+            onChange={(e) => {
+              void groundScreenshot(e.target.files?.[0]);
+              e.currentTarget.value = "";
+            }}
+          />
+        </label>
+        {groundResult ? <p className="muted">{groundResult}</p> : null}
       </section>
 
       <section className="panel">

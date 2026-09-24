@@ -1,0 +1,836 @@
+{
+  "generatedAt": "2026-09-24T22:26:11.865Z",
+  "corpus": {
+    "commits": 13,
+    "scenarios": 6,
+    "scenarioIds": [
+      "catalog-default-desktop",
+      "catalog-empty-desktop",
+      "catalog-loading-desktop",
+      "catalog-default-mobile",
+      "account-default-desktop",
+      "account-error-desktop"
+    ],
+    "plannedSlots": 78,
+    "viewportMapping": "6 scenario recipes each carry their own viewport (5 desktop, 1 mobile); the spec's 12x6x2=144 arithmetic maps to commits x scenarios = 78 per-recipe-viewport slots covering both viewports across the scenario set"
+  },
+  "referenceBuild": {
+    "repositoryHeadSha": "f9d1f6d64d0246196a478ccc38735c59a379362f",
+    "appUrl": "http://localhost:5173",
+    "apiUrl": "http://localhost:8787",
+    "projectId": "reference-app",
+    "liveCaptureExecuted": true
+  },
+  "totals": {
+    "planned": 78,
+    "captured": 6,
+    "expected_failure": 6,
+    "not_captured": 66
+  },
+  "slots": [
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "94c053d02e06e189d162876f1f6324c7612beb23",
+      "commitIndex": 1,
+      "commitMessage": "initial catalog with carousel",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "361b43704443c6a623706b79726b46a91f80ab5e",
+      "commitIndex": 2,
+      "commitMessage": "rename ProductCarousel to ProductChooser",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "51378ba7eb1a18c56916f2d697632eaee838fc4f",
+      "commitIndex": 3,
+      "commitMessage": "move ProductChooser into features/catalog/",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "853749d252958ad532cc820dcddfcef8ff21dd39",
+      "commitIndex": 4,
+      "commitMessage": "style-only refactor of chooser",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "76a85b77df8f96dfba4c80378f4f50f90c712aba",
+      "commitIndex": 5,
+      "commitMessage": "global spacing token change",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "5ab7b3b2d79b5f16f7549fd9d68ca0068313d9b2",
+      "commitIndex": 6,
+      "commitMessage": "add grid renderer",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "97177377bdbb47a0af551eb434c6621c98d69456",
+      "commitIndex": 7,
+      "commitMessage": "repeated instances: add related-products chooser",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "3354f0d89a73d114990c94a654098ce4bf4d1047",
+      "commitIndex": 8,
+      "commitMessage": "split: product chooser splits into chooser + sort control",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "40a4749c35ee895e33840d54769afc52119056c0",
+      "commitIndex": 9,
+      "commitMessage": "merge: sort control merged back",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "e5b80915bd9e274f524c75ecadc4719b41af5fc9",
+      "commitIndex": 10,
+      "commitMessage": "carousel → grid default",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "9990293130ca9d3c89eed2e06fba874aa5a334b2",
+      "commitIndex": 11,
+      "commitMessage": "revert to carousel default",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "not_captured",
+      "reason": "historical reconstruction not executed in dev profile: source corpus is synthetic"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c2f547dd8a99992665f01e6e37a9f5bb68023fec",
+      "commitIndex": 12,
+      "commitMessage": "intentionally unbuildable revision (INTENTIONALLY_UNBUILDABLE)",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": false,
+      "evidence": "expected_failure",
+      "reason": "syntax error; expected capture failure for all 12 slots"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "catalog-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_45efdc6a1c0241f5bce22271",
+      "sha256": "dc7dcaa3e46887ee9022a20f48fbdbcf6e470d5dda8923f67d7e1b758eae59b0",
+      "screenshotArtifactId": "artifact_ce5b1458d6bf4e008a3e80cb",
+      "observationCount": 3,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "catalog-empty-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_b7070b398a0a4cf8917de6fa",
+      "sha256": "1f3714350022c3fc6b5a1334a2cae5fc9fb912f978ca459302b231acf106ce50",
+      "screenshotArtifactId": "artifact_3b9efea96d554fad9cf44dd1",
+      "observationCount": 3,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "catalog-loading-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_d46ec5b72063447b8566ee87",
+      "sha256": "cb07caf0bdb3d052ca51ee689fefd1518dbf0151b310a6973943c9a6b4611ac6",
+      "screenshotArtifactId": "artifact_f2d38d88fef148c598c03ad2",
+      "observationCount": 3,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "catalog-default-mobile",
+      "viewport": "mobile",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_da6844b79cf24aae98d7f818",
+      "sha256": "e53ccc48625c9b4c4dfb644104d1c8e925ba31b9624ff5f381f9bb19484aa52b",
+      "screenshotArtifactId": "artifact_9266778c6f614d79ad8c0d34",
+      "observationCount": 3,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "account-default-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_5d83f295721e4acd900d1e1e",
+      "sha256": "3a8fed2782010dd48ce39e445bf94eeb6009658210185e048d3a0364ffec001e",
+      "screenshotArtifactId": "artifact_82d9710da9304fe2b95c24db",
+      "observationCount": 4,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    },
+    {
+      "commitSha": "c082757e6bf13abc9b52a8280446944ff8198dbb",
+      "commitIndex": 13,
+      "commitMessage": "fix build again",
+      "scenarioId": "account-error-desktop",
+      "viewport": "desktop",
+      "buildable": true,
+      "evidence": "captured",
+      "captureId": "capture_70bc957caee24563a3ebfd52",
+      "sha256": "00109fa47e6feea58d8cfbbc5da16821c4c1cfa538c0c85439e5172663d80280",
+      "screenshotArtifactId": "artifact_1e584be6eecc458c9de73f05",
+      "observationCount": 4,
+      "capturedCommitSha": "f9d1f6d64d0246196a478ccc38735c59a379362f"
+    }
+  ]
+}

@@ -3,7 +3,9 @@ import { entityContractSchema, type EntityContract, type JsonValue } from "@ui-i
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  findLogicalParent,
   getLogicalAncestors,
+  trackLogicalInstance,
   transferState,
   UiBoundary,
   UiRuntimeProvider,
@@ -343,5 +345,80 @@ describe("selection", () => {
     const outside = screen.getByTestId("outside");
     fireEvent.click(outside);
     expect(kernel.instances.resolveFromEventPath([outside, document.body])).toBeNull();
+  });
+});
+
+describe("logical parent resolution for repeated instances", () => {
+  it("prefers the tracked instance whose node contains the child in the DOM", () => {
+    const kernel = new FakeRuntimeKernel();
+    const parentA = document.createElement("div");
+    const parentB = document.createElement("div");
+    const child = document.createElement("div");
+    parentB.appendChild(child);
+    const infoA = makeInstanceInfo({ entityKey: "catalog.relatedProducts", getNode: () => parentA });
+    const infoB = makeInstanceInfo({ entityKey: "catalog.relatedProducts", getNode: () => parentB });
+    trackLogicalInstance(kernel, infoA);
+    trackLogicalInstance(kernel, infoB);
+
+    // The child sits inside B's subtree: B wins even though A was tracked.
+    expect(findLogicalParent(kernel, "catalog.relatedProducts", child)).toBe(infoB);
+    // A child outside both subtrees falls back to the most recent instance.
+    const outside = document.createElement("div");
+    expect(findLogicalParent(kernel, "catalog.relatedProducts", outside)).toBe(infoB);
+    // Without a child node the most recent tracked instance is used.
+    expect(findLogicalParent(kernel, "catalog.relatedProducts")).toBe(infoB);
+    // The first instance still resolves when it is the only one tracked.
+    const otherKernel = new FakeRuntimeKernel();
+    trackLogicalInstance(otherKernel, infoA);
+    expect(findLogicalParent(otherKernel, "catalog.relatedProducts", null)).toBe(infoA);
+  });
+
+  it("links a child boundary to the DOM-containing instance of a repeated entity key", () => {
+    const kernel = new FakeRuntimeKernel();
+    const relatedContract = makeContract({ entityKey: "catalog.relatedProducts" });
+    const relatedBinding = makeControlledBinding([]).binding;
+    const chooser = makeControlledBinding([]);
+
+    const ParentBoundary = ({ instanceKey, children }: { instanceKey: string; children?: React.ReactNode }) => (
+      <UiBoundary
+        contract={relatedContract}
+        bindings={{ data: relatedBinding, actions: {} }}
+        instanceKey={instanceKey}
+        rendererOverride={children ?? null}
+      />
+    );
+
+    // Render order: nested (tracks first), child (no node yet, falls back to
+    // latest), top (tracks last). After mount, the latest tracked instance is
+    // "related.top", but the child lives inside "related.nested"'s subtree.
+    render(
+      <UiRuntimeProvider kernel={kernel}>
+        <ParentBoundary instanceKey="related.nested">
+          <UiBoundary
+            contract={makeContract()}
+            bindings={{ data: chooser.binding, actions: {} }}
+            instanceKey="chooser.inside"
+            logicalParentEntityKey="catalog.relatedProducts"
+          />
+        </ParentBoundary>
+        <ParentBoundary instanceKey="related.top" />
+      </UiRuntimeProvider>,
+    );
+
+    const nestedHost = document.querySelector('[data-ui-instance="related.nested"]') as HTMLElement;
+    const topHost = document.querySelector('[data-ui-instance="related.top"]') as HTMLElement;
+    const childHost = document.querySelector('[data-ui-instance="chooser.inside"]') as HTMLElement;
+    expect(nestedHost).toBeTruthy();
+    expect(topHost).toBeTruthy();
+    const childInfo = kernel.instances.resolve(childHost)!;
+    expect(childInfo).toBeTruthy();
+
+    // Force a re-resolution with the child's node attached.
+    act(() => {
+      chooser.update([], "rev-2");
+    });
+
+    expect(childInfo.logicalParent?.getNode()).toBe(nestedHost);
+    expect(childInfo.logicalParent?.getNode()).not.toBe(topHost);
   });
 });

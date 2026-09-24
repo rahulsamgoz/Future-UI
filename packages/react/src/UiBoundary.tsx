@@ -51,7 +51,7 @@ export function UiBoundary({
   const nodeRef = useRef<HTMLElement | null>(null);
   if (infoRef.current === null) {
     const logicalParent = logicalParentEntityKey
-      ? findLogicalParent(kernel, logicalParentEntityKey)
+      ? findLogicalParent(kernel, logicalParentEntityKey, nodeRef.current)
       : null;
     infoRef.current = {
       runtimeInstanceId: newId<string>("rtinst"),
@@ -68,7 +68,7 @@ export function UiBoundary({
     info.contract = contract;
     info.bindings = bindings;
     if (logicalParentEntityKey) {
-      const logicalParent = findLogicalParent(kernel, logicalParentEntityKey);
+      const logicalParent = findLogicalParent(kernel, logicalParentEntityKey, nodeRef.current);
       if (logicalParent) info.logicalParent = logicalParent;
     }
   }

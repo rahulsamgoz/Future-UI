@@ -123,7 +123,7 @@ describe("HistoryConsole", () => {
     const heading = [...container!.querySelectorAll("h2")].find((h) => h.textContent!.includes("Side-by-side"));
     expect(heading!.textContent).toContain("(2/2 selected)");
     expect(container!.querySelectorAll(".compare-pane").length).toBe(2);
-    expect(client.fetchArtifactBlob).toHaveBeenCalledWith("art_1");
+    expect(client.fetchArtifactBlob).toHaveBeenCalledWith("proj_1", "art_1");
   });
 
   it("deselects a capture when clicked twice", async () => {

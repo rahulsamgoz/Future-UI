@@ -222,6 +222,74 @@ describe("ui-intelligence api", () => {
     });
   });
 
+  describe("occurrence retention across captures of the same page", () => {
+    it("keeps both captures' occurrences when occurrence ids repeat across captures", async () => {
+      // Two captures of the same page produce IDENTICAL deterministic
+      // occurrence ids (anchor + path index). The stored rows must be scoped
+      // per capture so the second ingest cannot overwrite the first.
+      const mk = (captureId: string, text: string): CaptureManifest =>
+        ({
+          captureId,
+          spec: {
+            protocolVersion: 1,
+            projectId: PROJECT,
+            commitSha: `sha_${captureId}`,
+            buildArtifactDigest: "bd_retain",
+            scenario: {
+              id: "catalog-desktop-signed-in",
+              recipeDigest: "rd1",
+              route: "/catalog",
+              fixtureDigest: "fd1",
+              role: "shopper",
+              featureFlagsDigest: "ff1",
+              viewport: { width: 1280, height: 800, deviceScaleFactor: 1 },
+              locale: "en-US",
+              timeZone: "UTC",
+              colorScheme: "light",
+              reducedMotion: false,
+            },
+            environment: {
+              runnerImageDigest: "ri",
+              browserRevision: "br",
+              fontsDigest: "fo",
+              adapterVersion: "av",
+              captureToolVersion: "ct",
+              redactionPolicyDigest: "rp",
+            },
+          },
+          capturedAt: "2026-01-10T10:00:00.000Z",
+          gitParents: [],
+          observations: [
+            {
+              occurrenceId: "occ_same_page_1",
+              captureId,
+              explicitAnchor: "catalog.productChooser",
+              visibleText: text,
+              bounds: [{ x: 0, y: 0, width: 100, height: 50 }],
+              coordinateSpace: "document-css-pixels",
+              sourceLinks: [{ definitionId: "catalog.productChooser", evidence: "registered" }],
+              completeness: "complete-for-scenario",
+              limitations: [],
+            },
+          ],
+          artifacts: [],
+          buildOutcome: "succeeded",
+          idempotencyKey: `key_${captureId}`,
+        }) as CaptureManifest;
+
+      const r1 = await app.inject({ method: "POST", url: `/v1/projects/${PROJECT}/captures`, headers: { ...JSON_HEADERS, "idempotency-key": "idem-retain-1" }, payload: { manifest: mk("cap_retain_1", "first capture text") } });
+      expect(r1.statusCode).toBe(201);
+      const r2 = await app.inject({ method: "POST", url: `/v1/projects/${PROJECT}/captures`, headers: { ...JSON_HEADERS, "idempotency-key": "idem-retain-2" }, payload: { manifest: mk("cap_retain_2", "second capture text") } });
+      expect(r2.statusCode).toBe(201);
+
+      const page1 = await app.inject({ method: "GET", url: `/v1/projects/${PROJECT}/entities/catalog.productChooser/history`, headers: { authorization: `Bearer dev-token` } });
+      const body = JSON.parse(page1.body);
+      const texts = body.observations.map((o: { summary: string }) => o.summary);
+      expect(texts.some((t: string) => t.includes("first capture text"))).toBe(true);
+      expect(texts.some((t: string) => t.includes("second capture text"))).toBe(true);
+    });
+  });
+
   describe("resolve", () => {
     it("resolves text to a single entity", async () => {
       const res = await post(app, `/v1/projects/${PROJECT}/resolve`, {
@@ -240,13 +308,11 @@ describe("ui-intelligence api", () => {
       expect(JSON.parse(res.body).status).toBe("resolved");
     });
 
-    it("answers screenshot grounding honestly as no_match", async () => {
+    it("answers screenshot grounding for an unknown artifact with 404", async () => {
       const res = await post(app, `/v1/projects/${PROJECT}/resolve`, {
         target: { kind: "screenshot", artifactId: "art_1" },
       });
-      const body = JSON.parse(res.body);
-      expect(body.status).toBe("no_match");
-      expect(body.reason).toContain("screenshot grounding");
+      expect(res.statusCode).toBe(404);
     });
   });
 

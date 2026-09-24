@@ -2,12 +2,24 @@
  * Target resolution service (spec sections 8 step 1 and 13). Selection is
  * authoritative; text resolves over a lexical index built in memory from DB
  * rows (cached per project, invalidated when a capture is ingested);
- * screenshot grounding is honestly unsupported in the dev profile.
+ * screenshots are grounded by comparing the uploaded crop against occurrence
+ * regions in authorized captures' screenshots. Scores are similarity ranks —
+ * never displayed as confidence percentages.
  */
 import type { ResolveResponse, TargetQuery } from "@ui-intelligence/protocol";
-import { buildLexicalIndex, resolveTargetFromText, type LexicalIndex } from "@ui-intelligence/indexing";
+import {
+  buildLexicalIndex,
+  decodePng,
+  groundScreenshot,
+  resolveTargetFromText,
+  type DecodedImage,
+  type GroundCandidate,
+  type LexicalIndex,
+} from "@ui-intelligence/indexing";
+import { UiIntelligenceError } from "@ui-intelligence/protocol";
 import type { Db } from "./db.js";
-import { getEntityById } from "./store.js";
+import { ObjectStore } from "./objectstore.js";
+import { getArtifact, getEntityById } from "./store.js";
 
 export class LexicalIndexCache {
   private cache = new Map<string, { index: LexicalIndex; captureCount: number }>();
@@ -45,6 +57,38 @@ export class LexicalIndexCache {
   }
 }
 
+/** Max decoded screenshots kept per API process (spec: bounded work). */
+const SCREENSHOT_CACHE_MAX = 16;
+
+/**
+ * Small LRU of decoded screenshots keyed by artifact digest, shared across
+ * resolve calls so repeated grounding does not re-decode the same PNG.
+ */
+export class ScreenshotDecodeCache {
+  private cache = new Map<string, DecodedImage | null>();
+
+  get(digest: string): DecodedImage | null | undefined {
+    if (!this.cache.has(digest)) return undefined;
+    const value = this.cache.get(digest) as DecodedImage | null;
+    this.cache.delete(digest);
+    this.cache.set(digest, value);
+    return value;
+  }
+
+  set(digest: string, image: DecodedImage | null): void {
+    this.cache.delete(digest);
+    this.cache.set(digest, image);
+    while (this.cache.size > SCREENSHOT_CACHE_MAX) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
+  }
+}
+
+/** Dependencies needed for screenshot grounding (resolved routes inject these). */
+export type ScreenshotGroundingDeps = { store: ObjectStore; screenshotCache: ScreenshotDecodeCache };
+
 /** Anchor sources per entity: the entity key plus anchored sub-elements. */
 function anchorSourcesForProject(db: Db, projectId: string): Array<{ entityKey: string; entityId: string; anchors: string[] }> {
   const entities = db
@@ -61,7 +105,148 @@ function anchorSourcesForProject(db: Db, projectId: string): Array<{ entityKey: 
   });
 }
 
-export function resolveTarget(db: Db, projectId: string, cache: LexicalIndexCache, query: TargetQuery): ResolveResponse {
+/** Resolve policy thresholds (spec section 13: abstain rather than mis-apply). */
+const RESOLVED_SCORE = 0.9;
+const RESOLVED_MARGIN = 1.15;
+const AMBIGUOUS_SCORE = 0.75;
+const CANDIDATE_CAP = 200;
+
+/**
+ * Screenshot grounding (spec section 13). The crop artifact must belong to
+ * the authorized project. Candidates are occurrences joined with their
+ * capture's screenshot artifact, bounded to the latest capture per scenario
+ * per anchor and capped. When resolution is weak the caller gets a shortlist
+ * or an honest no_match — never a guessed entity.
+ */
+function resolveScreenshotTarget(
+  db: Db,
+  projectId: string,
+  query: Extract<TargetQuery, { kind: "screenshot" }>,
+  deps: ScreenshotGroundingDeps
+): ResolveResponse {
+  // Ownership check: an artifact from another project (or a missing one) is a
+  // 404 so cross-project grounding never leaks existence.
+  const artifact = getArtifact(db, projectId, query.artifactId);
+  if (!artifact) {
+    throw new UiIntelligenceError("NOT_FOUND", `artifact ${query.artifactId} not found`, { httpStatus: 404 });
+  }
+
+  let crop: DecodedImage | null = null;
+  const cropBytes = deps.store.get(artifact.digest as string);
+  if (cropBytes) {
+    try {
+      crop = decodePng(cropBytes);
+    } catch {
+      crop = null;
+    }
+  }
+  if (!crop) {
+    return { status: "no_match", reason: "uploaded artifact could not be decoded as a PNG image" };
+  }
+
+  // Latest capture per (anchor, scenario) with a screenshot artifact, capped.
+  const rows = db
+    .prepare(
+      `SELECT o.id AS occurrence_id, o.anchor, o.bounds_json,
+              c.id AS capture_id, c.scenario_id, c.created_at, c.manifest_json
+       FROM occurrences o JOIN captures c ON c.id = o.capture_id
+       WHERE o.project_id = ? AND o.anchor IS NOT NULL
+       ORDER BY o.anchor ASC, c.created_at DESC, o.id ASC`
+    )
+    .all(projectId) as Array<{
+    occurrence_id: string;
+    anchor: string;
+    bounds_json: string;
+    capture_id: string;
+    scenario_id: string;
+    manifest_json: string;
+  }>;
+
+  const entityKeys = new Set(
+    (db.prepare("SELECT entity_key FROM ui_entities WHERE project_id = ?").all(projectId) as Array<{ entity_key: string }>).map(
+      (r) => r.entity_key
+    )
+  );
+  const entityKeyForAnchor = (anchor: string): string | null => {
+    if (entityKeys.has(anchor)) return anchor;
+    for (const key of entityKeys) {
+      if (anchor.startsWith(`${key}.`)) return key;
+    }
+    return null;
+  };
+
+  const seen = new Set<string>();
+  const candidates: GroundCandidate[] = [];
+  for (const row of rows) {
+    const dedupeKey = `${row.anchor} ${row.scenario_id}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const entityKey = entityKeyForAnchor(row.anchor);
+    if (!entityKey) continue;
+    let manifest: { artifacts?: Array<{ kind: string; digest: string }>; scrollOffsets?: { x: number; y: number } };
+    try {
+      manifest = JSON.parse(row.manifest_json);
+    } catch {
+      continue;
+    }
+    const screenshot = (manifest.artifacts ?? []).find((a) => a.kind === "screenshot-png");
+    if (!screenshot) continue;
+    const boundsList = JSON.parse(row.bounds_json);
+    const bounds = Array.isArray(boundsList) ? boundsList[0] : null;
+    if (!bounds || typeof bounds.x !== "number" || typeof bounds.width !== "number") continue;
+    candidates.push({
+      occurrenceId: row.occurrence_id,
+      entityKey,
+      captureId: row.capture_id,
+      screenshotDigest: screenshot.digest,
+      bounds,
+      scroll: manifest.scrollOffsets ?? { x: 0, y: 0 },
+    });
+    if (candidates.length >= CANDIDATE_CAP) break;
+  }
+
+  const results = groundScreenshot(
+    crop,
+    candidates,
+    (digest) => deps.store.get(digest),
+    deps.screenshotCache
+  );
+  const top = results[0];
+  const second = results[1];
+
+  if (top && top.score >= RESOLVED_SCORE && (!second || top.score >= second.score * RESOLVED_MARGIN)) {
+    const entity = getEntityById(db, projectId, top.entityKey);
+    if (entity) {
+      return { status: "resolved", entityId: entity.id, entityKey: entity.entityKey };
+    }
+  }
+
+  if (top && top.score >= AMBIGUOUS_SCORE) {
+    const shortlist = results.slice(0, 3);
+    return {
+      status: "ambiguous",
+      candidates: shortlist.map((result, i) => {
+        const entity = getEntityById(db, projectId, result.entityKey);
+        return {
+          entityId: entity?.id ?? result.entityKey,
+          entityKey: result.entityKey,
+          score: result.score,
+          explanation: `visual similarity rank ${i + 1} of ${shortlist.length}; select the intended region`,
+        };
+      }),
+    };
+  }
+
+  return { status: "no_match", reason: "no visually similar region found in authorized captures" };
+}
+
+export function resolveTarget(
+  db: Db,
+  projectId: string,
+  cache: LexicalIndexCache,
+  query: TargetQuery,
+  grounding?: ScreenshotGroundingDeps
+): ResolveResponse {
   if (query.kind === "selection") {
     const entity = getEntityById(db, projectId, query.entityId);
     if (!entity) {
@@ -71,11 +256,14 @@ export function resolveTarget(db: Db, projectId: string, cache: LexicalIndexCach
   }
 
   if (query.kind === "screenshot") {
-    // Honest dev-profile limitation (spec section 13): no visual grounding.
-    return {
-      status: "no_match",
-      reason: "screenshot grounding requires artifact analysis not configured in dev profile",
-    };
+    // Without the object store wired in, grounding is honestly unavailable.
+    if (!grounding) {
+      return {
+        status: "no_match",
+        reason: "screenshot grounding requires artifact analysis not configured in dev profile",
+      };
+    }
+    return resolveScreenshotTarget(db, projectId, query, grounding);
   }
 
   const index = cache.get(projectId);

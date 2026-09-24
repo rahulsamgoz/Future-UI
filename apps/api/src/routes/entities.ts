@@ -5,7 +5,7 @@ import { UiIntelligenceError } from "@ui-intelligence/protocol";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
 import { getProject, getRuntimeManifest } from "../store.js";
-import { resolveTarget, type LexicalIndexCache } from "../resolve.js";
+import { resolveTarget, type LexicalIndexCache, type ScreenshotGroundingDeps } from "../resolve.js";
 
 export type ManifestDeps = { db: Db };
 
@@ -24,10 +24,10 @@ export async function manifestRoutes(app: FastifyInstance, deps: ManifestDeps): 
   });
 }
 
-export type ResolveDeps = { db: Db; indexCache: LexicalIndexCache };
+export type ResolveDeps = { db: Db; indexCache: LexicalIndexCache } & ScreenshotGroundingDeps;
 
 export async function resolveRoutes(app: FastifyInstance, deps: ResolveDeps): Promise<void> {
-  const { db, indexCache } = deps;
+  const { db, indexCache, store, screenshotCache } = deps;
 
   app.post("/v1/projects/:p/resolve", async (request) => {
     const projectId = (request.params as { p: string }).p;
@@ -35,7 +35,7 @@ export async function resolveRoutes(app: FastifyInstance, deps: ResolveDeps): Pr
       throw new UiIntelligenceError("NOT_FOUND", `project ${projectId} not found`, { httpStatus: 404 });
     }
     const target = (request.body as { target?: unknown })?.target ?? request.body;
-    return resolveTarget(db, projectId, indexCache, target as Parameters<typeof resolveTarget>[3]);
+    return resolveTarget(db, projectId, indexCache, target as Parameters<typeof resolveTarget>[3], { store, screenshotCache });
   });
 }
 

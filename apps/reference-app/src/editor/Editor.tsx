@@ -257,6 +257,55 @@ export function Editor() {
     }
   }
 
+  // --- Screenshot grounding (spec section 13 journey) ---
+  // Uploads a PNG crop via the artifact slot flow, then asks the API to
+  // resolve it against authorized captures. Similarity ranks are shown
+  // without invented confidence percentages.
+  async function groundUpload(file: File | undefined) {
+    if (!file) return;
+    const push = (line: string) => setHistory((prev) => [...(prev ?? []), line]);
+    try {
+      const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
+      const base = apiBaseUrl ?? "";
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const hash = await crypto.subtle.digest("SHA-256", bytes);
+      const digest = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const slotRes = await fetch(`${base}/v1/projects/reference-app/artifact-uploads`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ mediaType: "image/png", byteSize: bytes.byteLength, digest }),
+      });
+      if (!slotRes.ok) throw new Error(`HTTP ${slotRes.status}`);
+      const { slotId } = (await slotRes.json()) as { slotId: string };
+      const putRes = await fetch(`${base}/v1/artifacts/${slotId}`, {
+        method: "PUT",
+        headers: { "content-type": "application/octet-stream", authorization: `Bearer ${token}` },
+        body: bytes,
+      });
+      if (!putRes.ok) throw new Error(`HTTP ${putRes.status}`);
+      const { artifactId } = (await putRes.json()) as { artifactId: string };
+      const resolveRes = await fetch(`${base}/v1/projects/reference-app/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ target: { kind: "screenshot", artifactId } }),
+      });
+      if (!resolveRes.ok) throw new Error(`HTTP ${resolveRes.status}`);
+      const result = (await resolveRes.json()) as
+        | { status: "resolved"; entityKey: string }
+        | { status: "ambiguous"; candidates: Array<{ entityKey: string }> }
+        | { status: "no_match"; reason: string };
+      if (result.status === "resolved") {
+        push(`Grounded: resolved → ${result.entityKey}`);
+      } else if (result.status === "ambiguous") {
+        push(`Grounded: ambiguous — ${result.candidates.map((c) => c.entityKey).join(", ")}; select the intended region`);
+      } else {
+        push(`Grounded: no match — ${result.reason}`);
+      }
+    } catch (error) {
+      push(`Grounded: failed — ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   function exportSpec() {
     const accepted = previewCandidate ?? candidates[0];
     if (!accepted) {
@@ -389,6 +438,18 @@ export function Editor() {
           {tab === "history" && (
             <div>
               <button className="btn primary" onClick={() => void loadHistory()} data-testid="load-history">Load history</button>
+              <label className="field">
+                Ground screenshot:
+                <input
+                  type="file"
+                  accept="image/png"
+                  data-testid="ground-upload"
+                  onChange={(e) => {
+                    void groundUpload(e.target.files?.[0]);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
               {history && (
                 <ul className="history-list">
                   {history.map((h, i) =>

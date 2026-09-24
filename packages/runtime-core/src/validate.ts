@@ -72,7 +72,9 @@ export class ProposalValidator {
         message: "presentation must be an object with string type, object properties, string dataBinding, and string[] actions",
         path: "presentation",
       });
-      return this.#report(errors, checkedInvariants, unsupportedChecks, readSet, policyVersion, {
+      // Only report what was actually checked: validation stops at the
+      // schema invariant, so the later invariants are not listed.
+      return this.#report(errors, ["schema"], unsupportedChecks, readSet, policyVersion, {
         presentation: spec,
         target: { entityKey: contract.entityKey, appBuildId: readSet.appBuildId },
       });
@@ -168,12 +170,16 @@ export class ProposalValidator {
     policyVersion: number,
   ): Promise<ValidationReport> {
     const errors: ValidationError[] = [];
+    // Invariants actually evaluated by the traversal below. "locked_regions"
+    // is part of the protocol's CheckedInvariant union and IS checked (the
+    // locked-slot loop after the visit walk).
     const checkedInvariants: CheckedInvariant[] = [
       "schema",
       "supported_type",
       "unique_node_ids",
       "allowed_children",
       "slot_membership",
+      "locked_regions",
       "depth_bound",
       "node_count_bound",
       "scope",
@@ -253,6 +259,8 @@ export class ProposalValidator {
         });
       } else {
         slotRegionCounts.set(node.slotId, (slotRegionCounts.get(node.slotId) ?? 0) + 1);
+        // An empty compatibleRenderers list means the slot is UNRESTRICTED:
+        // any representationId is accepted. Only a non-empty list constrains.
         if (
           node.representationId !== undefined &&
           slot.compatibleRenderers.length > 0 &&

@@ -13,7 +13,21 @@ function useFormValue(props: RendererProps) {
   const [name, setName] = useState(initial.name ?? "");
   const [email, setEmail] = useState(initial.email ?? "");
   const [bio, setBio] = useState(initial.bio ?? "");
-  return { name, setName, email, setEmail, bio, setBio };
+
+  // Declared form state (spec section 6): every edit is written back to the
+  // state adapter so a representation switch transfers the CURRENT editing
+  // state, not the state captured at mount.
+  const { state } = props;
+  const sync = (next: { name?: string; email?: string; bio?: string }) => {
+    if (!state) return;
+    const current = state.exportState() as { name?: string; email?: string; bio?: string };
+    state.importState({ ...current, ...next, dirty: true });
+  };
+  const setNameSynced = (v: string) => { setName(v); sync({ name: v }); };
+  const setEmailSynced = (v: string) => { setEmail(v); sync({ email: v }); };
+  const setBioSynced = (v: string) => { setBio(v); sync({ bio: v }); };
+
+  return { name, setName: setNameSynced, email, setEmail: setEmailSynced, bio, setBio: setBioSynced };
 }
 
 export function FormStandard(props: RendererProps) {

@@ -201,7 +201,12 @@ export class ProposalOrchestrator {
         },
         origin: { kind: raw.originKind, referenceIds: [] },
         validation: report,
-        summary: raw.summary,
+        // Summary is synthesized from validated fields only. Provider
+        // summaries (and instruction/reference echoes inside them) are an
+        // untrusted prompt-injection surface (spec section 19: "instructions
+        // embedded in references cannot bypass validation") and are never
+        // propagated into accepted candidates.
+        summary: `${raw.type} candidate (${raw.originKind})`,
       },
       errors: [],
     };

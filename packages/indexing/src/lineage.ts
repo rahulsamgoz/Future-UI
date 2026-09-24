@@ -27,11 +27,26 @@ const SPLIT_MERGE_SCORE = 0.6;
 /** Inferred (text-only, no anchor evidence) candidates are capped below 0.6. */
 export const INFERRED_SCORE_CAP = 0.5;
 
-/** Jaccard overlap of word tokens, lowercased. 0 when both sides are empty. */
+/**
+ * Minimum Jaccard overlap for split/merge candidates. Firing on ANY nonzero
+ * token overlap produced false splits on incidental shared words (review
+ * finding). 0.25 requires a quarter of the combined vocabulary to be shared:
+ * measured true split evidence on short UI texts is 0.29-0.33 (fixtures),
+ * while incidental one-word overlaps sit at or below ~0.1.
+ */
+export const SPLIT_MERGE_MIN_JACCARD = 0.25;
+
+/** Light plural stemming so "products"/"product", "items"/"item" compare equal. */
+function stemToken(token: string): string {
+  if (token.length >= 4 && token.endsWith("s") && !token.endsWith("ss")) return token.slice(0, -1);
+  return token;
+}
+
+/** Jaccard overlap of word tokens, lowercased and plural-stemmed. 0 when both sides are empty. */
 export function textJaccard(a: string, b: string): number {
   const tokens = (s: string): Set<string> => {
     const set = new Set<string>();
-    for (const tok of s.toLowerCase().split(/[^a-z0-9]+/)) if (tok) set.add(tok);
+    for (const tok of s.toLowerCase().split(/[^a-z0-9]+/)) if (tok) set.add(stemToken(tok));
     return set;
   };
   const ta = tokens(a);
@@ -65,11 +80,16 @@ function elementsOf(side: LineageSide): Element[] {
  *
  * Rules:
  * - explicit anchor name match => continues_as, score 1.0
- * - one predecessor matching several successors with shared text => split_into
- *   candidates (score 0.6, justified by text overlap Jaccard)
+ * - one predecessor matching several successors with shared text =>
+ *   split_into candidates (score 0.6, justified by text overlap Jaccard
+ *   >= SPLIT_MERGE_MIN_JACCARD so incidental word overlaps do not fire)
  * - several predecessors matching one successor => merged_into (score 0.6)
  * - no anchor match in the target but text matches => inferred candidate,
  *   relation continues_as, score = Jaccard capped at 0.5, rationale "inferred"
+ * - a new-anchor successor sharing text with an anchor-matched continuing
+ *   boundary => split_into (score 0.6); a vanished-anchor predecessor sharing
+ *   text with a continuing boundary => merged_into (score 0.6). Text
+ *   continuity with a disappearing predecessor takes precedence over both.
  */
 export function lineageCandidates(from: LineageSide, to: LineageSide): LineageCandidate[] {
   const fromElems = elementsOf(from);
@@ -96,7 +116,7 @@ export function lineageCandidates(from: LineageSide, to: LineageSide): LineageCa
       toUsed.add(te.index);
     } else if (matches.length > 1) {
       // Same explicit anchor reused by several successors: one -> many.
-      const withSharedText = matches.filter((te) => textJaccard(fe.text, te.text) > 0);
+      const withSharedText = matches.filter((te) => textJaccard(fe.text, te.text) >= SPLIT_MERGE_MIN_JACCARD);
       for (const te of withSharedText) {
         candidates.push({
           relation: "split_into",
@@ -119,7 +139,7 @@ export function lineageCandidates(from: LineageSide, to: LineageSide): LineageCa
   for (const fe of remainingFrom) {
     for (const te of remainingTo) {
       const j = textJaccard(fe.text, te.text);
-      if (j > 0) pairs.push({ f: fe, t: te, j });
+      if (j >= SPLIT_MERGE_MIN_JACCARD) pairs.push({ f: fe, t: te, j });
     }
   }
 
@@ -177,6 +197,61 @@ export function lineageCandidates(from: LineageSide, to: LineageSide): LineageCa
       score: Math.min(p.j, INFERRED_SCORE_CAP),
       rationale: `inferred from text overlap (jaccard ${p.j.toFixed(2)}); no matching anchor in target commit ${to.commitSha}`,
     });
+  }
+
+  // Pass 3: a NEW anchor in the target (absent from the source side) that
+  // shares >= SPLIT_MERGE_MIN_JACCARD text with an anchor-matched continuing
+  // boundary is a split candidate from that boundary. Text continuity takes
+  // precedence: if the new element already matches a disappearing (unmatched)
+  // predecessor via `pairs`, pass 2 owns it and no split is emitted.
+  const anchorMatchedFrom = new Set<number>();
+  const anchorMatchedTo = new Set<number>();
+  for (const fe of fromElems) {
+    if (!fe.anchor) continue;
+    if (toElems.some((te) => te.anchor === fe.anchor)) anchorMatchedFrom.add(fe.index);
+  }
+  for (const te of toElems) {
+    if (!te.anchor) continue;
+    if (fromElems.some((fe) => fe.anchor === te.anchor)) anchorMatchedTo.add(te.index);
+  }
+
+  for (const te of remainingTo) {
+    if (pairs.some((p) => p.t.index === te.index)) continue;
+    for (const fe of fromElems) {
+      if (!anchorMatchedFrom.has(fe.index)) continue;
+      const j = textJaccard(fe.text, te.text);
+      if (j >= SPLIT_MERGE_MIN_JACCARD) {
+        candidates.push({
+          relation: "split_into",
+          fromAnchor: fe.anchor ?? `#${fe.index}`,
+          toAnchor: te.anchor ?? `#${te.index}`,
+          score: SPLIT_MERGE_SCORE,
+          rationale: `split: successor introduces a new anchor in ${to.commitSha} and shares text with the continuing boundary (jaccard ${j.toFixed(2)})`,
+        });
+        break; // one continuing source per new successor
+      }
+    }
+  }
+
+  // Pass 4: symmetric merge — a source element whose anchor vanished shares
+  // text with an anchor-matched continuing target boundary, and is not already
+  // claimed by pass 2 text matching.
+  for (const fe of remainingFrom) {
+    if (pairs.some((p) => p.f.index === fe.index)) continue;
+    for (const te of toElems) {
+      if (!anchorMatchedTo.has(te.index)) continue;
+      const j = textJaccard(fe.text, te.text);
+      if (j >= SPLIT_MERGE_MIN_JACCARD) {
+        candidates.push({
+          relation: "merged_into",
+          fromAnchor: fe.anchor ?? `#${fe.index}`,
+          toAnchor: te.anchor ?? `#${te.index}`,
+          score: SPLIT_MERGE_SCORE,
+          rationale: `merge: source anchor disappeared in ${to.commitSha} and shares text with the continuing boundary (jaccard ${j.toFixed(2)})`,
+        });
+        break;
+      }
+    }
   }
 
   return candidates;

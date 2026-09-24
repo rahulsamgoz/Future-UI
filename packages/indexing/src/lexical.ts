@@ -27,6 +27,23 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
+/**
+ * Small English stopword list. Stopwords carry no target discrimination for
+ * UI text retrieval ("add to cart", "items in your cart") and would otherwise
+ * match nearly every observation, so text queries skip them. Kept minimal and
+ * frozen: growing the list silently changes retrieval behavior.
+ */
+const STOPWORDS: ReadonlySet<string> = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have",
+  "i", "in", "is", "it", "its", "me", "my", "not", "of", "on", "or", "our",
+  "s", "t", "that", "the", "this", "to", "was", "we", "were", "will", "with",
+  "you", "your",
+]);
+
+export function isStopword(term: string): boolean {
+  return STOPWORDS.has(term);
+}
+
 /** Build an inverted index over capture observations. */
 export function buildLexicalIndex(records: LexicalRecord[]): LexicalIndex {
   const index: LexicalIndex = {
@@ -80,6 +97,7 @@ export function search(index: LexicalIndex, query: LexicalQuery, limit: number):
 
   if (query.text) {
     for (const term of tokenize(query.text)) {
+      if (STOPWORDS.has(term)) continue;
       const postings = index.terms.get(term);
       if (!postings) continue;
       for (const [captureId, tf] of postings) {

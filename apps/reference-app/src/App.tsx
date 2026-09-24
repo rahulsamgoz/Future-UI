@@ -48,13 +48,14 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let preferences: PreferenceService | null = null;
     async function boot() {
       const kernel = createAppKernel();
       // Register entities with the kernel (idempotent by entityKey).
       for (const contract of allEntityContracts) {
         kernel.registerEntity(contract, { data: nullBinding, actions: {} });
       }
-      const preferences = new PreferenceService();
+      preferences = new PreferenceService();
       const contractVersions = new Map(allEntityContracts.map((c) => [c.entityKey, c.contractVersion] as const));
       contractVersions.set("page:catalog", 1);
       contractVersions.set("page:account", 1);
@@ -73,6 +74,8 @@ export function App() {
     void boot();
     return () => {
       cancelled = true;
+      // Close the cross-tab broadcast channel on unmount.
+      preferences?.dispose();
     };
   }, [cart]);
 

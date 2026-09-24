@@ -6,14 +6,14 @@ import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
 import { nowIso } from "../db.js";
 import { enqueueJob, insertOutbox } from "../jobs.js";
-import { resolveTarget, type LexicalIndexCache } from "../resolve.js";
+import { resolveTarget, type LexicalIndexCache, type ScreenshotGroundingDeps } from "../resolve.js";
 import { getProject, getProposal, getRuntimeManifest, listProposals } from "../store.js";
 import type { StoredProposalTarget } from "../processor.js";
 
-export type ProposalDeps = { db: Db; indexCache: LexicalIndexCache };
+export type ProposalDeps = { db: Db; indexCache: LexicalIndexCache } & ScreenshotGroundingDeps;
 
 export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): Promise<void> {
-  const { db, indexCache } = deps;
+  const { db, indexCache, store, screenshotCache } = deps;
 
   app.post("/v1/projects/:p/proposals", async (request, reply) => {
     const projectId = (request.params as { p: string }).p;
@@ -30,7 +30,7 @@ export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): 
     }
     const uiRequest = parsed.data;
 
-    const resolved = resolveTarget(db, projectId, indexCache, uiRequest.target);
+    const resolved = resolveTarget(db, projectId, indexCache, uiRequest.target, { store, screenshotCache });
     if (resolved.status === "ambiguous") {
       throw new UiIntelligenceError("AMBIGUOUS_TARGET", "target is ambiguous; choose a candidate", {
         httpStatus: 422,
