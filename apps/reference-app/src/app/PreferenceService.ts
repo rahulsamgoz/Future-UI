@@ -7,6 +7,7 @@ import type {
 } from "@ui-intelligence/protocol";
 import { newId } from "@ui-intelligence/protocol";
 import type { PreferenceStore } from "@ui-intelligence/preferences";
+import { PreferenceBroadcast } from "@ui-intelligence/preferences";
 import { OperationCoordinator } from "@ui-intelligence/runtime-core";
 import { IdbPreferenceStore, MemoryPreferenceStore } from "@ui-intelligence/preferences";
 import { ActivePreferenceStore } from "./ActivePreferenceStore.js";
@@ -92,7 +93,10 @@ export class PreferenceService {
   readonly store: PreferenceStore;
   readonly coordinator: OperationCoordinator;
   readonly active = new ActivePreferenceStore();
-  readonly profileId: string;
+  /** Opaque host-provided profile ID; reassigned by switchProfile. Never used as backend authorization. */
+  profileId: string;
+  readonly broadcast: PreferenceBroadcast;
+  private unsubscribeBroadcast: (() => void) | null = null;
   /** Preferences retained as recoverable drafts because the current build is incompatible. */
   readonly drafts = new Map<string, { reason: string; digest: string }>();
 
@@ -105,6 +109,22 @@ export class PreferenceService {
       this.store = new MemoryPreferenceStore();
     }
     this.coordinator = new OperationCoordinator();
+    // Cross-tab conflict handling (architecture section 9): after a commit,
+    // other tabs are notified so they can revalidate. This subscription keeps
+    // the live view current when ANOTHER tab applies or undoes — without a
+    // reload. BroadcastChannel does not echo to the sender; the local path
+    // already updates `active` (and re-reading here is idempotent anyway).
+    this.broadcast = new PreferenceBroadcast();
+    this.unsubscribeBroadcast = this.broadcast.subscribe((key) => {
+      void this.handleRemoteCommit(key);
+    });
+  }
+
+  /** Release the cross-tab channel (app unmount). */
+  dispose(): void {
+    this.unsubscribeBroadcast?.();
+    this.unsubscribeBroadcast = null;
+    this.broadcast.close();
   }
 
   get persistenceAvailable(): boolean {
@@ -123,6 +143,33 @@ export class PreferenceService {
   /** Startup: recover interrupted commits, revalidate stored preferences. */
   async init(knownScopeKeys: string[], contractVersions: Map<string, number>): Promise<void> {
     await this.coordinator.recoverAtStartup(this.store);
+    await this.rehydrate(knownScopeKeys, contractVersions);
+  }
+
+  /**
+   * Account switching (architecture section 9): change namespaces and clear
+   * in-memory selections and cached context. The store isolates records by
+   * profileId, so the new profile never reads the previous profile's
+   * preferences; this rehydrates the live view from the new profile's
+   * confirmed state.
+   */
+  async switchProfile(
+    profileId: string,
+    knownScopeKeys: string[],
+    contractVersions: Map<string, number>
+  ): Promise<void> {
+    this.profileId = profileId;
+    this.active.clear();
+    this.drafts.clear();
+    await this.coordinator.recoverAtStartup(this.store);
+    await this.rehydrate(knownScopeKeys, contractVersions);
+  }
+
+  /** Rebuild the live view from the current profile's stored preferences. */
+  private async rehydrate(
+    knownScopeKeys: string[],
+    contractVersions: Map<string, number>
+  ): Promise<void> {
     for (const scopeKey of knownScopeKeys) {
       const scope = PreferenceService.scopeOf(scopeKey);
       const pref = await this.store.getPreference(this.key(scope, scopeKey));
@@ -157,6 +204,46 @@ export class PreferenceService {
     }
   }
 
+  /**
+   * React to a preference commit (architecture section 9). Called for remote
+   * tab commits via the broadcast channel and — because PreferenceBroadcast
+   * invokes local subscribers directly — after this tab's own commits too.
+   * Re-reads the shared store and refreshes the live view to the confirmed
+   * revision; idempotent.
+   */
+  async handleRemoteCommit(key: PreferenceKey): Promise<void> {
+    if (key.profileId !== this.profileId || key.projectId !== PROJECT_ID) return;
+    const profileAtStart = this.profileId;
+    const pref = await this.store.getPreference(key);
+    // The profile may have switched while the store read was in flight;
+    // never apply a stale read into the new profile's live view.
+    if (this.profileId !== profileAtStart) return;
+    const scopeKey = key.scopeKey;
+    if (pref?.activeSpecificationDigest) {
+      const spec = await this.store.getSpecification(pref.activeSpecificationDigest);
+      const presentation = (
+        spec?.proposal as
+          | { presentation?: { type?: string; properties?: Record<string, JsonValue> } }
+          | null
+          | undefined
+      )?.presentation;
+      if (presentation?.type) {
+        this.active.set(scopeKey, {
+          representation: presentation.type,
+          properties: presentation.properties ?? {},
+          digest: pref.activeSpecificationDigest,
+          revision: pref.revision,
+        });
+        return;
+      }
+    }
+    // No confirmed preference for this scope (another tab undid to default or
+    // reset): clear the live view so the default interface renders.
+    if (this.active.get(scopeKey)) {
+      this.active.restore(scopeKey, null);
+    }
+  }
+
   /** Apply one accepted candidate to one target scope. */
   async apply(
     scopeKey: string,
@@ -167,12 +254,23 @@ export class PreferenceService {
   ): Promise<{ status: "active" | "failed" | "conflict"; applicationId?: string; reason?: string }> {
     const scope = PreferenceService.scopeOf(scopeKey);
     const prefKey = this.key(scope, scopeKey);
+    // Ground the proposal's preconditions on the revision the UI currently
+    // displays. Verified: store.beginApplication (memory-store.ts and
+    // idb-store.ts) re-reads the CURRENT revision inside its transaction and
+    // throws PreferenceConflictError on mismatch, so staleness relative to
+    // the displayed state is enforced transactionally by the store; the
+    // readSet here records what this apply was actually grounded on.
+    const currentPref = await this.store.getPreference(prefKey);
+    const groundedReadSet: TargetReadSet = {
+      ...readSet,
+      preferenceRevision: currentPref?.revision ?? 0,
+    };
     const proposal = buildProposal(
       newId("prop"),
       entityKey,
       candidate.representation,
       candidate.properties,
-      readSet,
+      groundedReadSet,
       scope
     );
     // Persist the immutable specification record before the transaction.
@@ -191,7 +289,7 @@ export class PreferenceService {
         requiredRendererVersions: candidate.requiredRendererVersions,
         contractVersion: 1,
       },
-      readSet,
+      groundedReadSet,
       {
         ...switcher,
         commit: async () => {
@@ -205,6 +303,11 @@ export class PreferenceService {
         },
       }
     );
+    if (result.status === "active") {
+      // Notify other tabs (architecture section 9); BroadcastChannel does not
+      // echo to this tab, and the local subscriber re-read is idempotent.
+      this.broadcast.notifyCommit(prefKey);
+    }
     return result;
   }
 
@@ -304,6 +407,7 @@ export class PreferenceService {
           digest: participants[i].candidate.digest,
           revision: pref?.revision ?? 1,
         });
+        this.broadcast.notifyCommit(prepared[i].key);
       }
       return { status: "active", applicationId };
     } catch (error) {
@@ -328,6 +432,9 @@ export class PreferenceService {
   /** Undo one application (single or batch). Never overwrites newer edits. */
   async undo(applicationId: string): Promise<{ restored: string[]; conflicts?: string[] }> {
     const result = await this.coordinator.undo(this.store, applicationId);
+    // Opportunistic housekeeping (review core#15): terminal application
+    // records accumulate; prune them without ever blocking the undo result.
+    void this.store.pruneApplications().catch(() => {});
     const record = await this.store.getApplication(applicationId);
     if (record) {
       for (const participant of record.participants) {
@@ -347,6 +454,7 @@ export class PreferenceService {
           } else {
             this.active.restore(scopeKey, null);
           }
+          this.broadcast.notifyCommit(participant.key);
         }
       }
     }
@@ -366,7 +474,8 @@ export class PreferenceService {
   async resetAll(knownScopeKeys: string[]): Promise<void> {
     for (const scopeKey of knownScopeKeys) {
       const scope = PreferenceService.scopeOf(scopeKey);
-      const pref = await this.store.getPreference(this.key(scope, scopeKey));
+      const key = this.key(scope, scopeKey);
+      const pref = await this.store.getPreference(key);
       if (pref) {
         await this.store.setPreference({
           ...pref,
@@ -374,6 +483,7 @@ export class PreferenceService {
           revision: pref.revision + 1,
           updatedAt: new Date().toISOString(),
         });
+        this.broadcast.notifyCommit(key);
       }
       this.active.restore(scopeKey, null);
     }

@@ -102,13 +102,17 @@ function defineStoreSuites(makeStore: () => PreferenceStore, closeStore: (store:
       expect(application?.status).toBe("active");
       // Finalize is single-use.
       await expect(store.finalizeApplication("app_1")).rejects.toThrow(/expected pending/);
-      // Undo then also works from the post-apply revision.
+      // Undo then also works from the post-apply revision. The undo is itself
+      // a new monotonic revision: the record is kept as a tombstone (no
+      // active digest) so an older bundle cannot resurrect the undone state.
       const undo = await store.undoApplication("app_1");
       expect(undo.restored).toContain(preferenceKeyToString(key()));
-      expect(await store.getPreference(key())).toBeNull();
+      const tombstone = await store.getPreference(key());
+      expect(tombstone?.activeSpecificationDigest).toBeNull();
+      expect(tombstone?.revision).toBe(2);
     });
 
-    it("restores the previous digest and revision on undo", async () => {
+    it("restores the previous digest at a fresh monotonic revision on undo", async () => {
       await store.setPreference({
         key: key(),
         activeSpecificationDigest: "spec_old",
@@ -122,8 +126,44 @@ function defineStoreSuites(makeStore: () => PreferenceStore, closeStore: (store:
       expect(undo.conflicts ?? []).toEqual([]);
       const restored = await store.getPreference(key());
       expect(restored?.activeSpecificationDigest).toBe("spec_old");
-      expect(restored?.revision).toBe(2);
+      // previousRevision was 2, apply bumped to 3, undo bumps again to 4 —
+      // revisions never rewind.
+      expect(restored?.revision).toBe(4);
       expect((await store.getApplication("app_2"))?.status).toBe("reverted");
+    });
+
+    it("a bundle exported before undo cannot resurrect the undone preference", async () => {
+      await store.putSpecification({
+        digest: "spec_new",
+        proposal: { type: "grid@1" },
+        requiredRendererVersions: { "grid@1": 1 },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      await applyOnce(store, "app_undo", participant());
+      const bundle = await store.exportBundle("profile_a", "project_1");
+      expect(bundle.preferences[0]?.revision).toBe(1);
+      await store.undoApplication("app_undo");
+      expect((await store.getPreference(key()))?.activeSpecificationDigest).toBeNull();
+      // Import must skip: the local tombstone revision (2) is newer than the
+      // bundle's undone revision (1).
+      const result = await store.importBundle(bundle);
+      expect(result).toEqual({ imported: 0, skipped: 1 });
+      expect((await store.getPreference(key()))?.activeSpecificationDigest).toBeNull();
+    });
+
+    it("prunes terminal application records but never active ones", async () => {
+      for (let i = 0; i < 60; i += 1) {
+        await store.beginApplication(`app_fail_${i}`, [participant({ key: key({ scopeKey: `s${i}` }) })], {});
+        await store.rollbackApplication(`app_fail_${i}`, "test");
+      }
+      await applyOnce(store, "app_active", participant());
+      const pruned = await store.pruneApplications();
+      expect(pruned).toBe(10);
+      expect(await store.getApplication("app_active")).not.toBeNull();
+      expect((await store.getApplication("app_fail_0"))).toBeNull();
+      expect(await store.getApplication("app_fail_59")).not.toBeNull();
+      expect((await store.listApplications("failed")).length).toBe(50);
+      expect((await store.listApplications("active")).length).toBe(1);
     });
 
     it("rollback leaves preferences untouched and records the reason", async () => {

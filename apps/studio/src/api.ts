@@ -93,6 +93,13 @@ export type CaptureSummaryDto = {
   observationCount: number;
 };
 
+export type UploadSlotDto = { slotId: string; uploadUrl: string; expiresAt: string };
+
+export type ResolveResponseDto =
+  | { status: "resolved"; entityId: string; entityKey: string }
+  | { status: "ambiguous"; candidates: Array<{ entityId: string; entityKey: string; score: number; explanation: string }> }
+  | { status: "no_match"; reason: string };
+
 export class ApiClient {
   constructor(
     private readonly baseUrl: string = API_BASE,
@@ -161,13 +168,47 @@ export class ApiClient {
     return this.request(`/v1/projects/${projectId}/proposals/${encodeURIComponent(proposalId)}`);
   }
 
+  /** Upload a PNG crop through the artifact slot flow, then ground it. */
+  async groundScreenshot(projectId: string, bytes: Uint8Array): Promise<ResolveResponseDto> {
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    const digest = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    const slot = await this.createUploadSlot(projectId, "image/png", bytes.byteLength, digest);
+    const { artifactId } = await this.uploadArtifactBytes(slot.slotId, bytes);
+    return this.resolveTarget(projectId, { kind: "screenshot", artifactId });
+  }
+
+  createUploadSlot(projectId: string, mediaType: string, byteSize: number, digest: string): Promise<UploadSlotDto> {
+    return this.request(`/v1/projects/${projectId}/artifact-uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mediaType, byteSize, digest }),
+    });
+  }
+
+  uploadArtifactBytes(slotId: string, bytes: Uint8Array): Promise<{ artifactId: string; digest: string }> {
+    return this.request(`/v1/artifacts/${encodeURIComponent(slotId)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream" },
+      body: bytes,
+    });
+  }
+
+  resolveTarget(projectId: string, target: { kind: "screenshot"; artifactId: string }): Promise<ResolveResponseDto> {
+    return this.request(`/v1/projects/${projectId}/resolve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+  }
+
   /** Screenshots are fetched as blobs (with auth) and rendered via object URLs. */
-  async fetchArtifactBlob(artifactId: string): Promise<Blob> {
+  async fetchArtifactBlob(projectId: string, artifactId: string): Promise<Blob> {
     const res = await fetch(
       `${this.baseUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/raw?projectId=${encodeURIComponent(projectId)}`,
       {
-      headers: this.headers(),
-    });
+        headers: this.headers(),
+      }
+    );
     if (!res.ok) throw new Error(`artifact fetch failed: ${res.status}`);
     return res.blob();
   }

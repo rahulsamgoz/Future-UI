@@ -54,15 +54,39 @@ export type ClaimedJob = {
   attempt: number;
 };
 
+/**
+ * Cancellation (spec section 11): queued jobs with a cancel request are
+ * terminal immediately; active work observes the flag at its next checkpoint
+ * (before handler dispatch, or from inside the handler via cancelRequested).
+ */
+export class JobCancelledError extends Error {
+  constructor(jobId: string) {
+    super(`job ${jobId} cancelled`);
+    this.name = "JobCancelledError";
+  }
+}
+
+export function cancelRequested(db: WorkerDb, jobId: string): boolean {
+  const row = db.prepare("SELECT cancel_requested FROM jobs WHERE id = ?").get(jobId) as
+    | { cancel_requested: number }
+    | undefined;
+  return row?.cancel_requested === 1;
+}
+
 /** Claim the oldest queued (or lease-expired) job in a short transaction. */
 export function claimNextJob(db: WorkerDb, workerId: string): ClaimedJob | null {
   const tx = db.transaction(() => {
     const now = nowIso();
+    // Stop scheduling cancelled work: queued jobs become terminal, running
+    // jobs lose their lease so the owner can no longer finalize results.
+    db.prepare(
+      "UPDATE jobs SET status = 'cancelled', finished_at = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE cancel_requested = 1 AND status IN ('queued', 'running')"
+    ).run(now, now);
     const row = db
       .prepare(
         `SELECT * FROM jobs
-         WHERE status = 'queued'
-            OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ?))
+         WHERE (status = 'queued' OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ?)))
+           AND cancel_requested = 0
          ORDER BY created_at ASC LIMIT 1`
       )
       .get(now) as Record<string, unknown> | undefined;
@@ -152,6 +176,7 @@ export function createWorker(db: WorkerDb, deps: WorkerDeps = {}): Worker {
     // Lease renewal thread while the job runs.
     renewalTimer = setInterval(() => renewLease(db, job.jobId, job.leaseToken), leaseRenewMs);
     try {
+      if (cancelRequested(db, job.jobId)) throw new JobCancelledError(job.jobId);
       const custom = deps.handlers?.[job.kind];
       if (custom) {
         await custom(job);
@@ -192,12 +217,20 @@ export function createWorker(db: WorkerDb, deps: WorkerDeps = {}): Worker {
         await processJob(job);
         completeClaimedJob(db, job, { succeeded: true });
       } catch (error) {
-        completeClaimedJob(db, job, {
-          succeeded: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Bounded retry with backoff before the next claim attempt.
-        await sleep(backoffBeforeRetry(job.attempt));
+        if (error instanceof JobCancelledError || cancelRequested(db, job.jobId)) {
+          // Termination deadline honored: the lease owner marks the job
+          // cancelled; no further publication happens for it.
+          db.prepare(
+            "UPDATE jobs SET status = 'cancelled', finished_at = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND lease_token = ?"
+          ).run(nowIso(), nowIso(), job.jobId, job.leaseToken);
+        } else {
+          completeClaimedJob(db, job, {
+            succeeded: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Bounded retry with backoff before the next claim attempt.
+          await sleep(backoffBeforeRetry(job.attempt));
+        }
       }
       return true;
     } finally {

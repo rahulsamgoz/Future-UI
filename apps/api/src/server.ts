@@ -8,7 +8,7 @@ import type { Db } from "./db.js";
 import { migrate, openDb } from "./db.js";
 import { registerAuthAndErrors } from "./auth.js";
 import { ObjectStore } from "./objectstore.js";
-import { LexicalIndexCache } from "./resolve.js";
+import { LexicalIndexCache, ScreenshotDecodeCache } from "./resolve.js";
 import { seedDevData } from "./seed.js";
 import { artifactRoutes } from "./routes/artifacts.js";
 import { captureRoutes } from "./routes/captures.js";
@@ -56,6 +56,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   const indexCache = new LexicalIndexCache(db);
+  const screenshotCache = new ScreenshotDecodeCache();
 
   await app.register(projectRoutes, { db });
   await app.register(historyPlanRoutes, { db });
@@ -63,9 +64,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(artifactRoutes, { db, store });
   await app.register(captureRoutes, { db, indexCache });
   await app.register(manifestRoutes, { db });
-  await app.register(resolveRoutes, { db, indexCache });
+  await app.register(resolveRoutes, { db, indexCache, store, screenshotCache });
   await app.register(entityRoutes, { db });
-  await app.register(proposalRoutes, { db, indexCache });
+  await app.register(proposalRoutes, { db, indexCache, store, screenshotCache });
   await app.register(jobRoutes, { db });
 
   app.get("/health", async () => ({ ok: true, traceId: randomUUID() }));

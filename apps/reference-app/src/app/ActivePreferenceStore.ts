@@ -33,6 +33,12 @@ export class ActivePreferenceStore {
     this.bump();
   }
 
+  /** Drop every in-memory selection (account switching, section 19). */
+  clear(): void {
+    this.prefs.clear();
+    this.bump();
+  }
+
   keys(): string[] {
     return [...this.prefs.keys()];
   }

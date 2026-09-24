@@ -35,5 +35,9 @@
   "overrides": {
     "react": "18.3.1",
     "react-dom": "18.3.1"
+  },
+  "dependencies": {
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0"
   }
 }

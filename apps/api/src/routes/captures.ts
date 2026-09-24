@@ -120,21 +120,26 @@ export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Pr
         capturedAt
       );
 
-      // Occurrences. Plain INSERT (loud failure over silent replacement):
-      // an occurrence id already owned by ANOTHER project's capture must
-      // never be overwritten. Within this project, re-ingest of the same
-      // capture is prevented by the idempotency-key check above.
+      // Occurrences. The manifest's occurrenceId is deterministic per page
+      // path (anchor#index), so it is NOT globally unique across captures of
+      // the same page. Scope the stored row id by capture: rowId =
+      // `${captureId}:${occurrenceId}`. This keeps two captures of the same
+      // page from overwriting each other (the old INSERT OR REPLACE silently
+      // reparented the first capture's rows to the second capture), while
+      // plain INSERT (loud failure over silent replacement) still rejects
+      // cross-project collisions. Re-ingest of the same capture is prevented
+      // by the idempotency-key check above.
       const insertOccurrence = db.prepare(
         "INSERT INTO occurrences (id, project_id, capture_id, entity_version_id, anchor, parent_id, visible_text, bounds_json, completeness, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       for (const obs of manifest.observations) {
         insertOccurrence.run(
-          obs.occurrenceId,
+          `${manifest.captureId}:${obs.occurrenceId}`,
           projectId,
           manifest.captureId,
           obs.entityVersionId ?? null,
           obs.explicitAnchor ?? null,
-          obs.parentOccurrenceId ?? null,
+          obs.parentOccurrenceId ? `${manifest.captureId}:${obs.parentOccurrenceId}` : null,
           obs.visibleText ?? null,
           JSON.stringify(obs.bounds),
           obs.completeness,

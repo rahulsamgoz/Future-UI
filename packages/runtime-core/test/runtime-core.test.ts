@@ -541,10 +541,14 @@ describe("OperationCoordinator", () => {
     expect(record?.activeSpecificationDigest).toBe("spec_grid");
     const application = await store.getApplication(result.applicationId);
     expect(application?.status).toBe("active");
-    // Undo restores the pristine state.
+    // Undo restores the pristine state as a tombstone record at a fresh
+    // monotonic revision (the undo itself is a new revision, so an older
+    // bundle cannot resurrect the undone preference).
     const undo = await coordinator.undo(store, result.applicationId);
     expect(undo.restored).toHaveLength(1);
-    expect(await store.getPreference(prefKey)).toBeNull();
+    const undone = await store.getPreference(prefKey);
+    expect(undone?.activeSpecificationDigest).toBeNull();
+    expect(undone?.revision).toBe(2);
   });
 
   it("rolls back when the switcher commit fails: revision unchanged, status failed", async () => {

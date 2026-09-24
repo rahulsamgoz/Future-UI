@@ -1,0 +1,14 @@
+{
+  "measurement": "inactive core runtime bundle (runtime-core + protocol + preferences store + react adapter entry)",
+  "perFile": [
+    {
+      "file": "assets/index-Bn7DFtOD.js",
+      "raw": 72673,
+      "gzip": 17389
+    }
+  ],
+  "totalRaw": 72673,
+  "totalGzip": 17389,
+  "budgetGzip": 30720,
+  "withinBudget": true
+}

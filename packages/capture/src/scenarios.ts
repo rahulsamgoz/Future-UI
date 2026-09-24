@@ -73,7 +73,7 @@ export function standardScenarios(): ScenarioRecipe[] {
     {
       id: "account-default-desktop",
       name: "Account default state, desktop",
-      route: "/account",
+      route: "/#/account",
       role: "member",
       viewport: DESKTOP,
       locale: "en-US",
@@ -83,12 +83,12 @@ export function standardScenarios(): ScenarioRecipe[] {
       featureFlags: {},
       fixture: "default",
       interactions: [],
-      readiness: { selector: "[data-ui-entity='account.page']", waitForFonts: true, stableFrames: 2 },
+      readiness: { selector: "[data-ui-entity='account.profileForm']", waitForFonts: true, stableFrames: 2 },
     },
     {
       id: "account-error-desktop",
       name: "Account error state, desktop",
-      route: "/account",
+      route: "/#/account",
       role: "member",
       viewport: DESKTOP,
       locale: "en-US",
@@ -98,7 +98,7 @@ export function standardScenarios(): ScenarioRecipe[] {
       featureFlags: {},
       fixture: "error",
       interactions: [],
-      readiness: { selector: "[data-ui-entity='account.page']", waitForFonts: true, stableFrames: 2 },
+      readiness: { selector: "[data-ui-entity='account.profileForm']", waitForFonts: true, stableFrames: 2 },
     },
   ];
 }

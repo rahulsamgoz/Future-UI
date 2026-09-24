@@ -3,3 +3,4 @@ export * from "./nearDuplicates.js";
 export * from "./lineage.js";
 export * from "./lexical.js";
 export * from "./resolveTarget.js";
+export * from "./visual.js";

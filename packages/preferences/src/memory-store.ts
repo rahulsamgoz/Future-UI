@@ -191,22 +191,35 @@ export class MemoryPreferenceStore implements PreferenceStore {
         conflicts.push(identity);
         continue;
       }
-      if (participant.previousRevision === 0 && participant.previousDigest === null) {
-        // No record existed before the application; restore by removing it.
-        this.#preferences.delete(identity);
-      } else {
-        this.#preferences.set(identity, {
-          key: { ...participant.key },
-          activeSpecificationDigest: participant.previousDigest,
-          revision: participant.previousRevision,
-          contractVersion: existing?.contractVersion ?? 0,
-          updatedAt: nowIso(),
-        });
-      }
+      // Undo is itself a new revision: restore the previous digest at a fresh
+      // monotonic revision (currentRevision + 1) instead of rewinding to
+      // previousRevision, so an export taken before the undo (carrying the
+      // undone revision) can never resurrect the undone preference on import.
+      // When no record existed before the application, previousDigest is null
+      // and the record is kept as a tombstone (no active digest) at the
+      // bumped revision — same resurrection protection.
+      this.#preferences.set(identity, {
+        key: { ...participant.key },
+        activeSpecificationDigest: participant.previousDigest,
+        revision: currentRevision + 1,
+        contractVersion: existing?.contractVersion ?? 0,
+        updatedAt: nowIso(),
+      });
       restored.push(identity);
     }
     application.status = "reverted";
     return { restored, ...(conflicts.length > 0 ? { conflicts } : {}) };
+  }
+
+  async pruneApplications(keepLast: number = 50): Promise<number> {
+    const terminal = [...this.#applications.values()]
+      .filter((a) => a.status === "failed" || a.status === "reverted")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const doomed = terminal.slice(0, Math.max(0, terminal.length - keepLast));
+    for (const application of doomed) {
+      this.#applications.delete(application.applicationId);
+    }
+    return doomed.length;
   }
 
   async recoverPending(): Promise<string[]> {

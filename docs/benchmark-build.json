@@ -1,0 +1,20 @@
+{
+  "measurement": "production build time with full ui-intelligence plugin vs virtual-module-only stub",
+  "runs": {
+    "without": [
+      534,
+      480,
+      467
+    ],
+    "withPlugin": [
+      497,
+      500,
+      472
+    ]
+  },
+  "medianWithoutMs": 480,
+  "medianWithMs": 497,
+  "overheadPct": 3.71,
+  "budgetOverheadPct": 5,
+  "withinBudget": true
+}

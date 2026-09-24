@@ -63,6 +63,14 @@ export interface PreferenceStore {
   /** Startup recovery: pending applications are interrupted commits; mark failed, preferences need no restore. */
   recoverPending(): Promise<string[]>;
 
+  /**
+   * Opportunistic housekeeping: delete terminal (failed/reverted) application
+   * records beyond the most recent `keepLast` (default 50, by createdAt).
+   * Active and pending records are NEVER touched — they may still be needed
+   * for undo. Returns the number of records removed.
+   */
+  pruneApplications(keepLast?: number): Promise<number>;
+
   exportBundle(profileId: string, projectId: string): Promise<PreferenceExportBundle>;
   importBundle(bundle: PreferenceExportBundle): Promise<ImportResult>;
   listApplications(status?: ApplicationStatus): Promise<ApplicationRecord[]>;
