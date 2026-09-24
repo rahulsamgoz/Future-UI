@@ -14,6 +14,21 @@ STORE_DIR="${UI_INTEL_STORE:-./data/artifacts}"
 API_PORT="${PORT:-8787}"
 TOKEN="${UI_INTEL_TOKEN:-dev-token}"
 
+# Optional real model provider: any OpenAI-compatible endpoint. Create
+# infra/dev/model.env (gitignored) with:
+#   UI_INTEL_MODEL_BASE_URL=https://opencode.ai/zen/v1   # or any OpenAI-compatible base
+#   UI_INTEL_MODEL_API_KEY=<your key>
+#   UI_INTEL_MODEL_NAME=<model id>
+# Without it, the deterministic local provider is used (no network needed).
+MODEL_ENV="infra/dev/model.env"
+if [ -f "$MODEL_ENV" ]; then
+  # shellcheck disable=SC1090
+  set -a; source "$MODEL_ENV"; set +a
+  echo "Model provider enabled: $UI_INTEL_MODEL_NAME at $UI_INTEL_MODEL_BASE_URL"
+else
+  echo "No infra/dev/model.env found — using the deterministic local provider."
+fi
+
 # Build if the entrypoints are missing.
 if [ ! -f apps/api/dist/server.js ]; then
   echo "Building apps/api..."
@@ -38,10 +53,16 @@ start() {
 
 start api "node .*apps/api/dist/server.js" env \
   UI_INTEL_DB="$DB_PATH" UI_INTEL_STORE="$STORE_DIR" UI_INTEL_TOKEN="$TOKEN" PORT="$API_PORT" \
+  UI_INTEL_MODEL_BASE_URL="${UI_INTEL_MODEL_BASE_URL:-}" \
+  UI_INTEL_MODEL_API_KEY="${UI_INTEL_MODEL_API_KEY:-}" \
+  UI_INTEL_MODEL_NAME="${UI_INTEL_MODEL_NAME:-}" \
   node apps/api/dist/server.js
 
 start index-worker "node .*apps/index-worker/dist/main.js" env \
   UI_INTEL_DB="$DB_PATH" UI_INTEL_SCHEMA="$ROOT/infra/dev/schema.sql" \
+  UI_INTEL_MODEL_BASE_URL="${UI_INTEL_MODEL_BASE_URL:-}" \
+  UI_INTEL_MODEL_API_KEY="${UI_INTEL_MODEL_API_KEY:-}" \
+  UI_INTEL_MODEL_NAME="${UI_INTEL_MODEL_NAME:-}" \
   node apps/index-worker/dist/main.js
 
 sleep 1

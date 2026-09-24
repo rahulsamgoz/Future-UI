@@ -14,3 +14,4 @@ uploads/
 artifacts-store/
 .vite/
 dist-private/
+infra/dev/model.env
