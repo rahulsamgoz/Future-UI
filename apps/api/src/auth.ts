@@ -3,17 +3,22 @@
  * wrong bearer tokens produce 401 ErrorResponse {error, traceId}.
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import type Database from "better-sqlite3";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ErrorCode } from "@ui-intelligence/protocol";
+import { authenticate, type Principal } from "./authz.js";
 
 declare module "fastify" {
   interface FastifyRequest {
     traceId: string;
+    principal?: Principal;
   }
 }
 
 export type AuthOptions = {
   token: string;
+  /** User/key store; when absent only the operator token authenticates. */
+  db?: Database;
 };
 
 function safeEqual(a: string, b: string): boolean {
@@ -22,18 +27,32 @@ function safeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-export function verifyToken(request: FastifyRequest, token: string): boolean {
-  // Constant-time comparison for both transports.
+export function extractToken(request: FastifyRequest): string | null {
   const header = request.headers.authorization ?? "";
-  if (header.startsWith("Bearer ") && safeEqual(header.slice(7), token)) return true;
+  if (header.startsWith("Bearer ")) return header.slice(7);
   // Dev-profile fallback: the Vorflux preview proxy strips Authorization
-  // headers. Accept the same token via access_token query parameter so the
-  // browser editor can reach the API through a public preview URL. This is
-  // equivalent in strength to the bearer token and only widens the transport.
+  // headers. Accept the token via access_token query parameter so the
+  // browser editor can reach the API through a public preview URL.
   const query = request.url.split("?", 2)[1] ?? "";
   const params = new URLSearchParams(query);
-  const queryToken = params.get("access_token");
-  return queryToken !== null && safeEqual(queryToken, token);
+  return params.get("access_token");
+}
+
+/** Authenticate the request to a principal (operator token OR user API key). */
+export function verifyToken(request: FastifyRequest, options: AuthOptions): Principal | null {
+  const presented = extractToken(request);
+  if (presented === null) return null;
+  // Constant-time operator comparison before any DB lookup.
+  if (safeEqual(presented, options.token)) {
+    return {
+      userId: "operator",
+      displayName: "Dev Operator",
+      operator: true,
+      roleFor: () => "owner",
+    };
+  }
+  if (!options.db) return null;
+  return authenticate(options.db, options.token, presented);
 }
 
 export function sendError(reply: FastifyReply, traceId: string, status: number, code: ErrorCode, message: string, details?: unknown): void {
@@ -60,10 +79,12 @@ export function registerAuthAndErrors(app: FastifyInstance, options: AuthOptions
       }
     }
     if (request.url === "/health") return; // liveness probe stays unauthenticated
-    if (!verifyToken(request, options.token)) {
-      sendError(reply, request.traceId, 401, "UNAUTHORIZED", "missing or invalid bearer token");
+    const principal = verifyToken(request, options);
+    if (!principal) {
+      sendError(reply, request.traceId, 401, "UNAUTHORIZED", "missing or invalid credentials");
       return reply;
     }
+    request.principal = principal;
   });
 
   app.addHook("onSend", async (request, reply, payload) => {

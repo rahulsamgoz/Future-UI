@@ -50,6 +50,11 @@ export class ActivePreferenceStore {
 
   getVersion = (): number => this.version;
 
+  /** Force subscribers to re-read (e.g. semantic rules changed the resolution outcome). */
+  touch(): void {
+    this.bump();
+  }
+
   private bump(): void {
     this.version += 1;
     this.listeners.forEach((l) => l());

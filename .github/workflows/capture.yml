@@ -1,0 +1,90 @@
+# Managed historical capture run (R2 streams D+H).
+#
+# workflow_dispatch only: a human schedules a capture set against a running
+# app. The stack (api + runner-manager + reference app dev server) is started
+# in-process, a pool of 2 capture-runner workers joins the manager, and the
+# CLI submits + polls the run. Artifacts: the run result and the capture
+# coverage report.
+#
+# Not executed in the dev sandbox (no GitHub runners); YAML validated locally.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repoUrl:
+        description: Repository URL recorded on the run
+        required: true
+        default: https://github.com/rahulsamgoz/Future-UI
+      commitSha:
+        description: Commit SHA to capture (defaults to the checked-out HEAD)
+        required: false
+      scenarios:
+        description: Comma-separated scenario ids
+        required: false
+        default: catalog-default-desktop,catalog-empty-desktop
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    env:
+      UI_INTEL_TOKEN: dev-token
+      RUNNER_TOKEN: dev-token
+      UI_INTEL_DB: /home/runner/work/ui-intelligence.sqlite
+      RUNNER_DB: /home/runner/work/runner.sqlite
+      UI_INTEL_STORE: /home/runner/work/artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build services and CLI
+        run: npx tsc -b packages/cli apps/api apps/runner-manager apps/capture-runner
+
+      - name: Install browser for capture workers
+        run: npx playwright install --with-deps chromium
+
+      - name: Start api + runner-manager + reference app
+        run: |
+          node apps/api/dist/server.js &
+          env APP_URL=http://localhost:5173 RUNNER_POOL_COUNT=2 node apps/runner-manager/dist/server.js &
+          (cd apps/reference-app && npx vite --port 5173 --strictPort &)
+          for i in $(seq 1 60); do curl -sf http://localhost:8787/health >/dev/null && break; sleep 1; done
+          for i in $(seq 1 60); do curl -sf http://localhost:8900/health >/dev/null && break; sleep 1; done
+          for i in $(seq 1 60); do curl -sf http://localhost:5173 >/dev/null && break; sleep 1; done
+
+      - name: Submit the managed capture run
+        run: |
+          SHA="${{ inputs.commitSha }}"
+          if [ -z "$SHA" ]; then SHA="$(git rev-parse HEAD)"; fi
+          node packages/cli/dist/cli.js history submit \
+            --repo "${{ inputs.repoUrl }}" \
+            --commit "$SHA" \
+            --scenarios "${{ inputs.scenarios }}" \
+            --manager http://localhost:8900 \
+            --project proj_reference_app \
+            --out run-result.json
+          cat run-result.json
+
+      - name: Coverage report
+        run: |
+          node fixtures/history/coverage.mjs \
+            --app http://localhost:5173 \
+            --api http://localhost:8787 \
+            --token dev-token \
+            --project proj_reference_app \
+            --out coverage-report.json || true
+
+      - name: Upload run artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-run
+          path: |
+            run-result.json
+            coverage-report.json
+          if-no-files-found: warn

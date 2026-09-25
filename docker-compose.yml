@@ -1,0 +1,98 @@
+# UI Intelligence full stack (R2 stream H, dev profile).
+#
+#   docker compose build
+#   docker compose up -d
+#   docker compose ps
+#
+# Services: api (8787), index-worker, runner-manager (8900), studio (5173),
+# reference-app (5174). The runner-manager does NOT spawn capture workers by
+# default (RUNNER_POOL_COUNT=0 — the slim image has no playwright browsers).
+# Point external capture-runner workers at it instead:
+#   RUNNER_MANAGER_URL=http://localhost:8900 APP_URL=http://localhost:5174 \
+#     node apps/capture-runner/dist/main.js
+# and submit runs: node packages/cli/dist/cli.js history submit --manager ...
+name: ui-intelligence
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      PORT: "8787"
+      UI_INTEL_DB: /app/data/ui-intelligence.sqlite
+      UI_INTEL_STORE: /app/data/artifacts
+      UI_INTEL_TOKEN: dev-token
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+    networks:
+      - ui-intel
+
+  index-worker:
+    build:
+      context: .
+      dockerfile: apps/index-worker/Dockerfile
+    environment:
+      UI_INTEL_DB: /app/data/ui-intelligence.sqlite
+      UI_INTEL_TOKEN: dev-token
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ui-intel
+
+  runner-manager:
+    build:
+      context: .
+      dockerfile: apps/runner-manager/Dockerfile
+    environment:
+      PORT: "8900"
+      RUNNER_DB: /app/data/runner.sqlite
+      RUNNER_TOKEN: dev-token
+      APP_URL: http://reference-app:80
+      # Spawn in-container capture workers (requires a browser stack in the
+      # image — see apps/runner-manager/Dockerfile). Default: external workers.
+      RUNNER_POOL_COUNT: "0"
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8900:8900"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ui-intel
+
+  studio:
+    build:
+      context: .
+      dockerfile: apps/studio/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ui-intel
+
+  reference-app:
+    build:
+      context: .
+      dockerfile: apps/reference-app/Dockerfile
+    ports:
+      - "5174:80"
+    restart: unless-stopped
+    networks:
+      - ui-intel
+
+networks:
+  ui-intel:
+    driver: bridge

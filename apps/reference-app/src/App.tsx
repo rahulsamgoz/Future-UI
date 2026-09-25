@@ -59,7 +59,7 @@ export function App() {
       const contractVersions = new Map(allEntityContracts.map((c) => [c.entityKey, c.contractVersion] as const));
       contractVersions.set("page:catalog", 1);
       contractVersions.set("page:account", 1);
-      await preferences.init(KNOWN_SCOPE_KEYS, contractVersions);
+      await preferences.init(KNOWN_SCOPE_KEYS, contractVersions, kernel.renderers);
       const generator = new LocalGenerator(kernel);
       if (!cancelled) {
         setServices({

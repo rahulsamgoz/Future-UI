@@ -6,9 +6,10 @@ import { createControlledDataProvider, createStubActionBindings } from "@ui-inte
 import { useAppServices } from "../Services.js";
 import { digestOf } from "@ui-intelligence/protocol";
 import { type LocalCandidate, validatedCandidate } from "./LocalGenerator.js";
+import { RulesTab } from "./RulesTab.js";
 import { appRendererMap } from "../kernel.js";
 
-type Tab = "select" | "candidates" | "batch" | "page" | "history";
+type Tab = "select" | "candidates" | "batch" | "page" | "rules" | "history";
 
 /**
  * End-user editor: select a boundary (click), inspect alternatives, preview
@@ -345,8 +346,8 @@ export function Editor() {
           <button className="icon-btn" onClick={() => setOpen(false)} aria-label="Close editor">✕</button>
         </header>
         <nav className="editor-tabs" role="tablist">
-          {(["select", "candidates", "batch", "page", "history"] as Tab[]).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
+          {(["select", "candidates", "batch", "page", "rules", "history"] as Tab[]).map((t) => (
+            <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)} data-testid={t === "rules" ? "rules-tab" : undefined}>
               {t}
             </button>
           ))}
@@ -434,6 +435,8 @@ export function Editor() {
               </ul>
             </div>
           )}
+
+          {tab === "rules" && <RulesTab />}
 
           {tab === "history" && (
             <div>

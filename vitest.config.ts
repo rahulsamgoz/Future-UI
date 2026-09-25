@@ -29,6 +29,10 @@ for (const a of apiApps) {
 
 export default defineConfig({
   resolve: { alias },
+  // apps/next-demo keeps "jsx": "preserve" in its tsconfig (required by
+  // Next.js); force the automatic JSX runtime for vitest everywhere — it is
+  // identical to the "react-jsx" the other projects' tsconfigs already use.
+  esbuild: { jsx: "automatic" },
   test: {
     include: [
       "packages/*/test/**/*.test.ts",
@@ -42,7 +46,8 @@ export default defineConfig({
       ["packages/react/test/**", "jsdom"],
       ["packages/renderers/test/**", "jsdom"],
       ["apps/reference-app/test/**", "jsdom"],
-      ["apps/studio/test/**", "jsdom"]
+      ["apps/studio/test/**", "jsdom"],
+      ["apps/next-demo/test/**", "jsdom"]
     ],
     testTimeout: 30000,
     hookTimeout: 30000

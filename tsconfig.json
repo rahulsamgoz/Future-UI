@@ -14,6 +14,7 @@
     { "path": "apps/api" },
     { "path": "apps/index-worker" },
     { "path": "apps/capture-runner" },
+    { "path": "apps/runner-manager" },
     { "path": "apps/studio" },
     { "path": "apps/reference-app" }
   ]

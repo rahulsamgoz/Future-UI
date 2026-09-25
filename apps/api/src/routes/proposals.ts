@@ -189,6 +189,12 @@ export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): 
       {
         format: "ui-intelligence/specification@1",
         proposalId: proposal.id,
+        // Target identity so downstream consumers (e.g. `ui-intel handoff`)
+        // can scope the default preference without a second lookup.
+        target: {
+          entityKey: (proposal.request as { target?: { entityId?: string } }).target?.entityId ?? null,
+          scope: (proposal.request as { target?: { entityId?: string } }).target ? "entity" : null,
+        },
         candidate: proposal.acceptedCandidate.candidate,
         candidateId: proposal.acceptedCandidate.candidateId,
         acceptedAt: proposal.acceptedCandidate.acceptedAt,

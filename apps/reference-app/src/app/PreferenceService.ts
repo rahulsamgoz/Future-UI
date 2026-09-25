@@ -3,12 +3,14 @@ import type {
   JsonValue,
   PreferenceKey,
   Proposal,
+  SemanticRule,
   TargetReadSet,
 } from "@ui-intelligence/protocol";
 import { newId } from "@ui-intelligence/protocol";
 import type { PreferenceStore } from "@ui-intelligence/preferences";
 import { PreferenceBroadcast } from "@ui-intelligence/preferences";
-import { OperationCoordinator } from "@ui-intelligence/runtime-core";
+import type { RendererRegistry } from "@ui-intelligence/runtime-core";
+import { RuleEngine, OperationCoordinator } from "@ui-intelligence/runtime-core";
 import { IdbPreferenceStore, MemoryPreferenceStore } from "@ui-intelligence/preferences";
 import { ActivePreferenceStore } from "./ActivePreferenceStore.js";
 
@@ -99,6 +101,9 @@ export class PreferenceService {
   private unsubscribeBroadcast: (() => void) | null = null;
   /** Preferences retained as recoverable drafts because the current build is incompatible. */
   readonly drafts = new Map<string, { reason: string; digest: string }>();
+  /** Semantic rules loaded from the store, evaluated through a RuleEngine (R2 part C). */
+  #ruleEngine: RuleEngine = new RuleEngine([]);
+  #renderers: RendererRegistry | null = null;
 
   constructor() {
     this.profileId = ensureProfileId();
@@ -127,6 +132,35 @@ export class PreferenceService {
     this.broadcast.close();
   }
 
+  /** App-level defaults from the handoff file; personal preferences win. */
+  async loadAppDefaults(): Promise<void> {
+    try {
+      const res = await fetch("/ui-intelligence.preferences.json");
+      if (!res.ok) return;
+      const file = (await res.json()) as {
+        defaults?: Array<{
+          scopeKey: string;
+          scope?: "entity" | "instance" | "page";
+          representation: string;
+          properties?: Record<string, JsonValue>;
+          contractVersion?: number;
+        }>;
+      };
+      for (const entry of file.defaults ?? []) {
+        // Only fill gaps: an explicit personal preference always wins.
+        if (this.active.get(entry.scopeKey)) continue;
+        this.active.set(entry.scopeKey, {
+          representation: entry.representation,
+          properties: entry.properties ?? {},
+          digest: null, // app default, not a personal specification
+          revision: 0,
+        });
+      }
+    } catch {
+      // No handoff file (normal case) or fetch unavailable — no defaults.
+    }
+  }
+
   get persistenceAvailable(): boolean {
     return typeof indexedDB !== "undefined";
   }
@@ -141,9 +175,45 @@ export class PreferenceService {
   }
 
   /** Startup: recover interrupted commits, revalidate stored preferences. */
-  async init(knownScopeKeys: string[], contractVersions: Map<string, number>): Promise<void> {
+  async init(
+    knownScopeKeys: string[],
+    contractVersions: Map<string, number>,
+    renderers?: RendererRegistry,
+  ): Promise<void> {
+    if (renderers) this.#renderers = renderers;
+    await this.loadRules();
     await this.coordinator.recoverAtStartup(this.store);
+
+    // App-level defaults from the developer handoff file
+    // (ui-intelligence.preferences.json): applied ONLY where the user has no
+    // personal preference (spec section 9 precedence: app defaults < org <
+    // personal). Failures to load are non-fatal.
+    await this.loadAppDefaults();
     await this.rehydrate(knownScopeKeys, contractVersions);
+  }
+
+  /**
+   * The live RuleEngine over this profile's persisted semantic rules. Rules
+   * are hints — the precedence explicit preference > rule > contract default
+   * is applied at the call site (see useResolvedRepresentation).
+   */
+  get rules(): RuleEngine {
+    return this.#ruleEngine;
+  }
+
+  /** Reload the rule list from the store and rebuild the engine (R2 part C). */
+  private async loadRules(): Promise<void> {
+    const rules = await this.store.getRules(this.profileId, PROJECT_ID);
+    this.#ruleEngine = new RuleEngine(rules, this.#renderers ?? undefined);
+  }
+
+  /** Persist a new rule list and rebuild the engine. */
+  async setRules(rules: SemanticRule[]): Promise<void> {
+    await this.store.putRules(this.profileId, PROJECT_ID, rules);
+    await this.loadRules();
+    // Representation resolution may change anywhere; force consumers of the
+    // active-preference view to re-read.
+    this.active.touch();
   }
 
   /**
@@ -161,6 +231,8 @@ export class PreferenceService {
     this.profileId = profileId;
     this.active.clear();
     this.drafts.clear();
+    // Rules are per profile: reload them for the new namespace.
+    await this.loadRules();
     await this.coordinator.recoverAtStartup(this.store);
     await this.rehydrate(knownScopeKeys, contractVersions);
   }
