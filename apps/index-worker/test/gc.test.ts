@@ -53,14 +53,14 @@ function seed(db: ReturnType<typeof openWorkerDb>, artifactRoot: string): { oldD
 }
 
 describe("runScheduledGc", () => {
-  it("deletes retention-expired artifacts (bytes included), keeps fresh and current-build", () => {
+  it("deletes retention-expired artifacts (bytes included), keeps fresh and current-build", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-wgc-"));
     const artifactRoot = join(dir, "artifacts");
     const db = openWorkerDb(join(dir, "w.sqlite"));
     migrateWorker(db);
     const { oldDigest, freshDigest } = seed(db, artifactRoot);
 
-    const outcome = runScheduledGc(db, {
+    const outcome = await runScheduledGc(db, {
       now: NOW,
       retentionDays: 30,
       artifactRoot,
@@ -76,12 +76,12 @@ describe("runScheduledGc", () => {
     db.close();
   });
 
-  it("skips when the last successful run is younger than the interval", () => {
+  it("skips when the last successful run is younger than the interval", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-wgc2-"));
     const db = openWorkerDb(join(dir, "w.sqlite"));
     migrateWorker(db);
-    runScheduledGc(db, { now: NOW, retentionDays: 30, artifactRoot: join(dir, "a"), log: () => undefined });
-    const second = runScheduledGc(db, {
+    await runScheduledGc(db, { now: NOW, retentionDays: 30, artifactRoot: join(dir, "a"), log: () => undefined });
+    const second = await runScheduledGc(db, {
       now: new Date(NOW.getTime() + 2 * 60 * 60 * 1000), // +2h < 24h
       retentionDays: 30,
       artifactRoot: join(dir, "a"),
@@ -89,7 +89,7 @@ describe("runScheduledGc", () => {
     });
     expect(second).toEqual({ ran: false, reason: "not_due" });
     // But it runs once the interval has passed.
-    const third = runScheduledGc(db, {
+    const third = await runScheduledGc(db, {
       now: new Date(NOW.getTime() + 25 * 60 * 60 * 1000),
       retentionDays: 30,
       artifactRoot: join(dir, "a"),
@@ -99,17 +99,43 @@ describe("runScheduledGc", () => {
     db.close();
   });
 
-  it("skips entirely when the s3 driver is configured", () => {
-    process.env.UI_INTEL_STORAGE_DRIVER = "s3";
+  it("deletes bytes through the real s3 driver path when UI_INTEL_STORAGE_DRIVER=s3 (audit fix 4)", async () => {
+    // The former "skip when s3" behavior is removed: scheduled GC now issues
+    // awaited DeleteObjectCommands against the configured bucket.
+    const sent: Array<{ name: string; input: Record<string, unknown> }> = [];
+    const s3Client = {
+      send: async (command: { constructor: Function; input: Record<string, unknown> }) => {
+        sent.push({ name: command.constructor.name, input: command.input });
+        return {};
+      },
+    };
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-wgc3-"));
     const db = openWorkerDb(join(dir, "w.sqlite"));
     migrateWorker(db);
-    const outcome = runScheduledGc(db, { now: NOW, retentionDays: 30, artifactRoot: join(dir, "a"), log: () => undefined });
-    expect(outcome).toEqual({ ran: false, reason: "s3_driver_unsupported" });
+    seed(db, join(dir, "artifacts")); // rows only; bytes are remote in s3 mode
+
+    const outcome = await runScheduledGc(db, {
+      now: NOW,
+      retentionDays: 30,
+      dryRun: false,
+      driver: "s3",
+      s3Bucket: "worker-gc-bucket",
+      s3Prefix: "ui-intel/",
+      s3Client,
+      log: () => undefined,
+    });
+    expect(outcome).toEqual({ ran: true, deletedCount: 1 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].name).toBe("DeleteObjectCommand");
+    expect(sent[0].input.Bucket).toBe("worker-gc-bucket");
+    // Key = prefix + R1 digest-sharded layout, matching the API driver.
+    expect(String(sent[0].input.Key)).toMatch(/^ui-intel\/[0-9a-f]{2}\/[0-9a-f]+$/);
+    const remaining = db.prepare("SELECT id FROM artifacts ORDER BY id").all().map((r) => (r as { id: string }).id);
+    expect(remaining).toEqual(["art_curbuild", "art_fresh"]);
     db.close();
   });
 
-  it("aborts (recorded with an error) when more than 50% would be deleted", () => {
+  it("aborts (recorded with an error) when more than 50% would be deleted", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-wgc4-"));
     const db = openWorkerDb(join(dir, "w.sqlite"));
     migrateWorker(db);
@@ -122,7 +148,7 @@ describe("runScheduledGc", () => {
       ).run(id, "d".repeat(64), OLD);
     }
     const logs: string[] = [];
-    const outcome = runScheduledGc(db, {
+    const outcome = await runScheduledGc(db, {
       now: NOW,
       retentionDays: 30,
       artifactRoot: join(dir, "a"),

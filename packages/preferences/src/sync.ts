@@ -5,22 +5,38 @@
  * - The local bundle is exported from the store, enqueued into the sync
  *   outbox, then pushed through the transport.
  * - On success the outbox is cleared and the authoritative bundle returned
- *   by the server is applied:
- *     - local revision <  server revision → apply the server record;
- *     - equal revision, equal digest      → skip (already converged);
- *     - equal revision, DIFFERENT digest  → the server wins: the server
- *       record is stored, and the local specification is retained as a
- *       DRAFT (never silently overwritten);
- *     - local revision >  server revision → keep local (server lagged).
+ *   by the server is applied. Revisions from independent devices have no
+ *   causal meaning (device A's revision 1 is not "before" device B's
+ *   revision 2), so every comparison is anchored on the lastSyncedBase
+ *   revision per scope key — the last SERVER revision this device observed
+ *   being adopted (see below):
+ *     - local revision >  base AND server revision > base AND digests
+ *       differ → DIVERGENT edit: both sides changed since the last observed
+ *       server state, regardless of which revision number is bigger. The
+ *       server record is applied and the local specification is retained as
+ *       a DRAFT (never silently overwritten);
+ *     - local revision <= base (local unchanged since the observed server
+ *       state) → the server change is a strict fast-forward and may apply
+ *       silently (equal revision with a different digest still retains the
+ *       local spec as a draft — the server-wins policy);
+ *     - local revision > base, server revision <= base → the server is
+ *       behind what we already observed: local wins, nothing is applied;
+ *     - equal digests → converged, nothing to do.
  *
- * Drafts: the store has no draft concept by design (a preference record
- * always reflects the ACTIVE specification). Divergent local specifications
- * are therefore held in this SyncManager as `Map<scopeKey, SpecificationRecord>`
- * (keyed by syncIdentityString's identity within the manager's single
- * profile/project). Drafts are in-memory only — they survive neither reload
- * nor account switch (architecture section 9: account switching clears
- * in-memory selections) — and are exposed via `drafts` for UI recovery ("an
- * incompatible preference is retained as a recoverable draft").
+ * Persistence (additive, no schema change): the store has no draft or sync
+ * bookkeeping concept by design (a preference record always reflects the
+ * ACTIVE specification). SyncManager therefore persists its state as
+ * SpecificationRecords under RESERVED digest prefixes via
+ * putSpecification/listSpecifications:
+ *   - `draft:<profileId>:<projectId>:<scope>:<scopeKey>` → the retained
+ *     local SpecificationRecord is wrapped in `proposal`;
+ *   - `sync-bases:<profileId>:<projectId>` → the base-revision map
+ *     (Record<identity, number>) in `proposal`.
+ * Reserved prefixes never collide with content digests, and records that no
+ * active preference references are excluded from exportBundle, so
+ * bookkeeping never leaks into a pushed bundle. State survives manager
+ * recreation (reload, account switch back); `restore()` re-loads it and the
+ * constructor starts hydration automatically.
  */
 import {
   newId,
@@ -52,22 +68,44 @@ export type ApplyOutcome = {
   retainedAsDraft: string[];
 };
 
+/** Reserved digest prefixes for SyncManager bookkeeping records. */
+export const DRAFT_DIGEST_PREFIX = "draft:";
+export const SYNC_BASES_DIGEST_PREFIX = "sync-bases:";
+
+function draftDigestId(profileId: string, projectId: string, identity: string): string {
+  return `${DRAFT_DIGEST_PREFIX}${profileId}:${projectId}:${identity}`;
+}
+
+function syncBasesDigestId(profileId: string, projectId: string): string {
+  return `${SYNC_BASES_DIGEST_PREFIX}${profileId}:${projectId}`;
+}
+
 export class SyncManager {
   readonly #store: PreferenceStore;
   readonly #transport: SyncTransport;
   readonly #options: SyncManagerOptions;
   /**
-   * Divergent local specifications retained after an equal-revision/
-   * different-digest conflict, keyed by syncIdentityString within this
-   * manager's profile+project. See the module documentation.
+   * Divergent local specifications retained after a conflict, keyed by
+   * syncIdentityString within this manager's profile+project. Persisted to
+   * the store under the reserved draft digest prefix (see module docs).
    */
   readonly #drafts = new Map<string, SpecificationRecord>();
+  /**
+   * lastSyncedBase revision per scope-key identity: the last SERVER revision
+   * this device observed being adopted (or agreed on while pulling). Local
+   * revision counters are device-local and never update it directly.
+   * Persisted under the reserved sync-bases digest prefix.
+   */
+  #bases = new Map<string, number>();
+  /** Hydrates persisted drafts and bases exactly once per manager. */
+  readonly #ready: Promise<void>;
   #autoSyncTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(store: PreferenceStore, transport: SyncTransport, options: SyncManagerOptions) {
     this.#store = store;
     this.#transport = transport;
     this.#options = options;
+    this.#ready = this.#hydrate();
   }
 
   /** Divergent local specifications kept as recoverable drafts. */
@@ -76,11 +114,81 @@ export class SyncManager {
   }
 
   /**
+   * (Re)load persisted drafts and sync bases from the store. Idempotent;
+   * called automatically by the constructor and before every sync.
+   */
+  async restore(): Promise<void> {
+    await this.#ready;
+  }
+
+  async #hydrate(): Promise<void> {
+    let records: SpecificationRecord[];
+    try {
+      records = await this.#store.listSpecifications();
+    } catch {
+      return; // Store unavailable: operate from memory only.
+    }
+    const draftPrefix = `${DRAFT_DIGEST_PREFIX}${this.#options.profileId}:${this.#options.projectId}:`;
+    const basesId = syncBasesDigestId(this.#options.profileId, this.#options.projectId);
+    for (const record of records) {
+      if (record.digest === basesId) {
+        const bases = record.proposal as Record<string, unknown> | null;
+        if (bases && typeof bases === "object") {
+          for (const [identity, revision] of Object.entries(bases)) {
+            if (typeof revision === "number" && !this.#bases.has(identity)) {
+              this.#bases.set(identity, revision);
+            }
+          }
+        }
+        continue;
+      }
+      if (record.digest.startsWith(draftPrefix)) {
+        const identity = record.digest.slice(draftPrefix.length);
+        const specification = record.proposal as SpecificationRecord | null;
+        if (specification && typeof specification.digest === "string" && !this.#drafts.has(identity)) {
+          this.#drafts.set(identity, specification);
+        }
+      }
+    }
+  }
+
+  /** Persist one retained draft as a reserved SpecificationRecord. */
+  async #retainDraft(identity: string, specification: SpecificationRecord): Promise<void> {
+    this.#drafts.set(identity, specification);
+    await this.#store.putSpecification({
+      digest: draftDigestId(this.#options.profileId, this.#options.projectId, identity),
+      // The retained record is wrapped whole, so the draft's own content
+      // digest survives round trips.
+      proposal: specification,
+      requiredRendererVersions: { ...specification.requiredRendererVersions },
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  /** Persist the base-revision map (only called when it changed). */
+  async #persistBases(): Promise<void> {
+    const bases: Record<string, number> = {};
+    for (const [identity, revision] of this.#bases) bases[identity] = revision;
+    await this.#store.putSpecification({
+      digest: syncBasesDigestId(this.#options.profileId, this.#options.projectId),
+      proposal: bases,
+      requiredRendererVersions: {},
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  /**
    * Export the local state, enqueue outbox operations, push, clear the
    * outbox, then apply the authoritative bundle. Throws when the transport
    * fails — the outbox entries are kept so a later syncNow retries.
+   *
+   * The returned SyncMergeResult is the server's classification, with
+   * `retainedAsDraft` AUGMENTED by every key this device detected as
+   * divergent while applying the authoritative bundle (the server cannot
+   * classify a push it ignored because its revision was already ahead).
    */
   async syncNow(): Promise<SyncMergeResult> {
+    await this.#ready;
     const bundle = await this.#exportBundle();
     // Enqueue BEFORE the push (architecture section 9: syncOutbox carries
     // operations with a unique operation id and base revision) so an
@@ -106,8 +214,11 @@ export class SyncManager {
     for (const operation of await this.#store.listOutbox()) {
       await this.#store.clearSync(operation.operationId);
     }
-    await this.applyAuthoritative(result.authoritative);
-    return result;
+    const outcome = await this.applyAuthoritative(result.authoritative);
+    return {
+      ...result,
+      retainedAsDraft: [...new Set([...result.retainedAsDraft, ...outcome.retainedAsDraft])],
+    };
   }
 
   /**
@@ -116,9 +227,11 @@ export class SyncManager {
    * a device can pull (another device's push) without pushing first.
    */
   async applyAuthoritative(bundle: SyncBundle): Promise<ApplyOutcome> {
+    await this.#ready;
     const applied: string[] = [];
     const skipped: string[] = [];
     const retainedAsDraft: string[] = [];
+    let basesChanged = false;
     const specificationsByDigest = new Map(
       bundle.specifications.map((specification) => [specification.digest, specification]),
     );
@@ -129,32 +242,78 @@ export class SyncManager {
       }
       const identity = syncIdentityString(record.key);
       const local = await this.#store.getPreference(record.key);
-      if (local === null || local.revision < record.revision) {
+      const serverDigest = record.activeSpecificationDigest;
+      const localDigest = local?.activeSpecificationDigest ?? null;
+      const base = this.#bases.get(identity) ?? 0;
+
+      if (local === null) {
+        // Nothing local (fresh device pull): adopt the server record; the
+        // adopted revision becomes the new observed-server anchor.
         await this.#applyServerRecord(record, specificationsByDigest);
+        this.#bases.set(identity, record.revision);
+        basesChanged = true;
         applied.push(identity);
         continue;
       }
-      if (local.revision > record.revision) {
-        // Server is behind (e.g. its merge dropped our push): local wins.
+      if (localDigest === serverDigest) {
+        // Converged content. The base is intentionally NOT advanced here:
+        // the agreement may just be this device's own push being echoed
+        // back, and the base must keep pointing at the last SERVER state
+        // this device observed, so a later server-side clobber of our push
+        // is detected as a divergence.
         skipped.push(identity);
         continue;
       }
-      // Equal revision.
-      if (local.activeSpecificationDigest === record.activeSpecificationDigest) {
+      if (local.revision > base && record.revision > base) {
+        // DIVERGENT: both sides changed since the last observed server
+        // state. Revision numbers carry no causal meaning across devices —
+        // the server record is applied and the local specification is
+        // retained as a recoverable draft no matter which revision is
+        // bigger.
+        const localSpec = local.activeSpecificationDigest
+          ? await this.#store.getSpecification(local.activeSpecificationDigest)
+          : null;
+        if (localSpec) await this.#retainDraft(identity, localSpec);
+        await this.#applyServerRecord(record, specificationsByDigest);
+        this.#bases.set(identity, record.revision);
+        basesChanged = true;
+        applied.push(identity);
+        retainedAsDraft.push(identity);
+        continue;
+      }
+      if (local.revision <= base) {
+        // Local unchanged since the last observed server state: the server
+        // change is a fast-forward and may apply silently — EXCEPT at equal
+        // revision with a different digest, where the server-wins policy
+        // still retains the local specification as a draft.
+        if (record.revision === local.revision) {
+          const localSpec = local.activeSpecificationDigest
+            ? await this.#store.getSpecification(local.activeSpecificationDigest)
+            : null;
+          if (localSpec) await this.#retainDraft(identity, localSpec);
+          await this.#applyServerRecord(record, specificationsByDigest);
+          this.#bases.set(identity, record.revision);
+          basesChanged = true;
+          applied.push(identity);
+          retainedAsDraft.push(identity);
+          continue;
+        }
+        if (record.revision > local.revision) {
+          await this.#applyServerRecord(record, specificationsByDigest);
+          this.#bases.set(identity, record.revision);
+          basesChanged = true;
+          applied.push(identity);
+          continue;
+        }
+        // Server is behind an unchanged local record: keep local.
         skipped.push(identity);
         continue;
       }
-      // Equal revision, different digest: server wins in the store; the
-      // local specification is retained as a recoverable draft (never
-      // silently overwritten).
-      const localSpec = local.activeSpecificationDigest
-        ? await this.#store.getSpecification(local.activeSpecificationDigest)
-        : null;
-      if (localSpec) this.#drafts.set(identity, localSpec);
-      await this.#applyServerRecord(record, specificationsByDigest);
-      applied.push(identity);
-      retainedAsDraft.push(identity);
+      // Local changed since the last observed server state and the server
+      // still sits at (or behind) it: local wins; nothing to apply.
+      skipped.push(identity);
     }
+    if (basesChanged) await this.#persistBases();
     return { applied, skipped, retainedAsDraft };
   }
 

@@ -97,7 +97,7 @@ export function buildCaptureUrl(baseUrl: string, recipe: ScenarioRecipe): string
 }
 
 /** In-page collection of registered boundary elements (runs via page.evaluate). */
-function collectEntitiesInPage(maskedSelectors: string[] = []): EntityEvaluation[] {
+export function collectEntitiesInPage(maskedSelectors: string[] = []): EntityEvaluation[] {
   // Self-contained: page.evaluate serializes this function body only, so all
   // helpers must live inside it.
   // Masked elements (redaction policy) report "[REDACTED]" text so the secret
@@ -118,6 +118,27 @@ function collectEntitiesInPage(maskedSelectors: string[] = []): EntityEvaluation
       cursor = cursor.parentElement;
     }
     return false;
+  };
+  // A mask on a DESCENDANT must not leak through the boundary's own
+  // textContent (a parent boundary's text includes all child text). Read text
+  // from a clone of the node with masked elements excised; when that removes
+  // the boundary's entire meaningful text, report the redaction marker.
+  const visibleTextFor = (node: HTMLElement): string => {
+    if (isMasked(node)) return "[REDACTED]";
+    const clone = node.cloneNode(true) as HTMLElement;
+    const originals: Element[] = [node, ...Array.from(node.querySelectorAll("*"))];
+    const clones: Element[] = [clone, ...Array.from(clone.querySelectorAll("*"))];
+    let maskedTextRemoved = false;
+    for (let i = 0; i < originals.length; i += 1) {
+      const original = originals[i];
+      const cloneElement = clones[i];
+      if (original === node || !isMasked(original)) continue;
+      if ((cloneElement.textContent ?? "").trim().length > 0) maskedTextRemoved = true;
+      cloneElement.parentNode?.removeChild(cloneElement);
+    }
+    const text = (clone.textContent ?? "").trim();
+    if (text.length === 0 && maskedTextRemoved) return "[REDACTED]";
+    return text;
   };
   function implicitRole(node: HTMLElement): string | undefined {
     const tag = node.tagName.toLowerCase();
@@ -152,7 +173,7 @@ function collectEntitiesInPage(maskedSelectors: string[] = []): EntityEvaluation
       anchor: node.dataset.uiEntity ?? "",
       ...(node.dataset.uiInstance === undefined ? {} : { instanceKey: node.dataset.uiInstance }),
       ...(role === undefined ? {} : { role }),
-      visibleText: isMasked(node) ? "[REDACTED]" : (node.textContent ?? "").trim(),
+      visibleText: visibleTextFor(node),
       rect: {
         x: rect.x + window.scrollX,
         y: rect.y + window.scrollY,

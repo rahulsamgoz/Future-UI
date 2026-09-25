@@ -97,6 +97,12 @@ export class OperationCoordinator {
    * record the pending application (previous revisions/digests) in the store,
    * switch the renderer through the host adapter, and finalize — or roll
    * back. A revision conflict is reported without touching the UI.
+   *
+   * The EXPECTED revision is `readSet.preferenceRevision` — the revision the
+   * proposal was generated against (what the user saw) — NOT a fresh read of
+   * the store. The store re-checks it transactionally in beginApplication,
+   * so an apply built on a stale view returns { status: "conflict" } instead
+   * of overwriting a newer revision written in the meantime.
    */
   async apply(
     store: PreferenceStoreLike,
@@ -105,12 +111,13 @@ export class OperationCoordinator {
     readSet: { preferenceRevision: number },
     switcher: RendererSwitcher,
   ): Promise<ApplyResult> {
-    void readSet;
     const current = await store.getPreference(key);
     const applicationId = newId<ApplicationId>("app");
     const participant: ApplicationParticipantInput = {
       key,
-      previousRevision: current?.revision ?? 0,
+      // Expected previous revision: what the caller's read set observed. A
+      // mismatch against the store's CURRENT revision is a conflict.
+      previousRevision: readSet.preferenceRevision,
       previousDigest: current?.activeSpecificationDigest ?? null,
       proposedDigest: specification.digest,
       ...(specification.contractVersion !== undefined

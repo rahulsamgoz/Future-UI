@@ -188,6 +188,15 @@ CREATE TABLE IF NOT EXISTS synced_preferences (
 
 -- Retention/GC bookkeeping (R2 stream G): manual and scheduled runs record
 -- their outcome here; the index-worker's daily check reads MAX(finished_at).
+-- Profile ownership (audit fix, finding 1): a profile is bound to the
+-- principal that first synced it; other principals are denied 403. The dev
+-- operator principal is exempt (may access any profile).
+CREATE TABLE IF NOT EXISTS sync_profiles (
+  profile_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS gc_runs (
   id TEXT PRIMARY KEY,
   project_id TEXT,

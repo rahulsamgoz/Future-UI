@@ -8,6 +8,7 @@
  * locally by design — no cross-app imports).
  */
 import type { RunExecutor } from "./executor.js";
+import type { UploadApi } from "@ui-intelligence/capture";
 
 export type WorkerLoopOptions = {
   managerUrl: string;
@@ -15,6 +16,8 @@ export type WorkerLoopOptions = {
   executor: RunExecutor;
   /** App URL the executor captures against (env APP_URL in production). */
   appUrl: string;
+  /** History API for durable publication (passed through to the executor). */
+  historyApi?: UploadApi;
   pollMs?: number;
   heartbeatMs?: number;
   signal?: AbortSignal;
@@ -95,6 +98,7 @@ export async function runWorkerLoop(options: WorkerLoopOptions): Promise<void> {
           commitSha: body.run.commitSha,
           scenarios: body.run.scenarios,
           appUrl: options.appUrl,
+          historyApi: options.historyApi,
         });
         await managerFetch(options.managerUrl, token, "POST", `/v1/runs/${body.runId}/complete`, {
           workerId,

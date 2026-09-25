@@ -17,11 +17,43 @@ identity-model cases from `docs/architecture.md` section 16:
 | 9 | merge: sort control merged back | sort control boundary disappears again |
 | 10 | carousel → grid default | visual A→B change |
 | 11 | revert to carousel default | A→B→A reversion |
-| 12 | intentionally unbuildable revision | syntax error, message contains `INTENTIONALLY_UNBUILDABLE` |
+| 12 | intentionally unbuildable revision | `app.js` throws on load, message contains `INTENTIONALLY_UNBUILDABLE` |
 | 13 | fix build again | back to green |
 
-Every commit carries `data-ui-entity="catalog.productChooser"` anchors inside rendered
-markup strings, so anchor-based matching works across the whole corpus without a build.
+## Runnable corpus
+
+Every commit is a **runnable static app with no build step**: `index.html` (host page,
+commit-distinct heading so captures are attributable) + `app.js` (renders the committed UI
+into `#app` with real `data-ui-entity` anchors) + `tokens.css`/`styles.css` where the
+narrative adds them. Commit 12's `app.js` throws on load, so the page never renders and
+readiness is never satisfied — a genuine, honest capture failure.
+
+`app.js` also honors the standard scenario fixture query param (`?__fixture=`): `empty`
+renders zero product cards and `loading` defers rendering by 350 ms, so the standard
+scenario recipes observe real pending/empty states. The committed UI renders at `/`
+regardless of route; the reconstruction executor adapts the recipes accordingly
+(`tolerantRecipe` in `packages/capture/src/reconstruct.ts`).
+
+## Reconstruction
+
+The corpus is the run target for genuine historical reconstruction:
+
+- `packages/capture/src/reconstruct.ts` — `reconstructCommit()`: materializes a commit as a
+  `git worktree`, serves the static tree on an ephemeral port (serving IS the build for this
+  corpus; real apps would run their build pipeline there), runs the scenario recipes with
+  `ScenarioRunner`, publishes every capture with `CaptureUploader`, and VERIFIES publication
+  (capture retrievable, occurrences > 0, artifact bytes readable from the raw endpoint)
+  before counting a scenario as captured. Provenance is bound in the manifest:
+  `spec.commitSha` = the reconstructed commit, `buildArtifactDigest` = digest of the served
+  tree. A commit whose sources declare `INTENTIONALLY_UNBUILDABLE` yields per-scenario
+  EXPECTED failures — never synthetic successes.
+- `apps/index-worker` `history_scan` — when the plan/job input carries `fixtureRepo`, every
+  selected commit is reconstructed (extend-without-duplicating: existing captures are
+  reused), and the job payload records per-commit outcomes
+  (`captured` | `expected_failure` | `failed`).
+- `fixtures/history/coverage.mjs` — regenerates `docs/coverage-report.json` by running the
+  reconstruction over the whole corpus against the history API (`--offline` keeps producing
+  the honest gap-only manifest for hermetic test runs).
 
 ## Capture slots
 

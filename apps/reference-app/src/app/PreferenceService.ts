@@ -4,13 +4,15 @@ import type {
   PreferenceKey,
   Proposal,
   SemanticRule,
+  SyncBundle,
+  SyncMergeResult,
   TargetReadSet,
 } from "@ui-intelligence/protocol";
 import { newId } from "@ui-intelligence/protocol";
 import type { PreferenceStore } from "@ui-intelligence/preferences";
-import { PreferenceBroadcast } from "@ui-intelligence/preferences";
+import { PreferenceBroadcast, SyncManager, type SyncTransport } from "@ui-intelligence/preferences";
 import type { RendererRegistry } from "@ui-intelligence/runtime-core";
-import { RuleEngine, OperationCoordinator } from "@ui-intelligence/runtime-core";
+import { RuleEngine, OperationCoordinator, isRevisionConflict } from "@ui-intelligence/runtime-core";
 import { IdbPreferenceStore, MemoryPreferenceStore } from "@ui-intelligence/preferences";
 import { ActivePreferenceStore } from "./ActivePreferenceStore.js";
 
@@ -26,6 +28,11 @@ export type ApplyCandidate = {
 };
 
 export type Switcher = Parameters<OperationCoordinator["apply"]>[4];
+
+/** Outcome of a device sync attempt (never throws; errors are reported). */
+export type DeviceSyncResult =
+  | { ok: true; synced: number; conflicts: number }
+  | { ok: false; error: string };
 
 const PROJECT_ID = "reference-app";
 
@@ -104,6 +111,10 @@ export class PreferenceService {
   /** Semantic rules loaded from the store, evaluated through a RuleEngine (R2 part C). */
   #ruleEngine: RuleEngine = new RuleEngine([]);
   #renderers: RendererRegistry | null = null;
+  /** Scope keys the live view was (re)hydrated for; refreshed after device sync. */
+  #knownScopeKeys: string[] = [];
+  /** Base URL of the device-sync API (null = same-origin); set by the host at boot. */
+  apiBaseUrl: string | null = null;
 
   constructor() {
     this.profileId = ensureProfileId();
@@ -189,6 +200,7 @@ export class PreferenceService {
     // personal preference (spec section 9 precedence: app defaults < org <
     // personal). Failures to load are non-fatal.
     await this.loadAppDefaults();
+    this.#knownScopeKeys = [...knownScopeKeys];
     await this.rehydrate(knownScopeKeys, contractVersions);
   }
 
@@ -234,6 +246,7 @@ export class PreferenceService {
     // Rules are per profile: reload them for the new namespace.
     await this.loadRules();
     await this.coordinator.recoverAtStartup(this.store);
+    this.#knownScopeKeys = [...knownScopeKeys];
     await this.rehydrate(knownScopeKeys, contractVersions);
   }
 
@@ -330,23 +343,31 @@ export class PreferenceService {
     const scope = PreferenceService.scopeOf(scopeKey);
     const prefKey = this.key(scope, scopeKey);
     // Ground the proposal's preconditions on the revision the UI currently
-    // displays. Verified: store.beginApplication (memory-store.ts and
-    // idb-store.ts) re-reads the CURRENT revision inside its transaction and
-    // throws PreferenceConflictError on mismatch, so staleness relative to
-    // the displayed state is enforced transactionally by the store; the
-    // readSet here records what this apply was actually grounded on.
-    const currentPref = await this.store.getPreference(prefKey);
+    // DISPLAYS (the live view), never on a fresh store read: a competing
+    // writer (another tab, device sync, bundle import) may have moved the
+    // stored record since the user saw it. The store re-checks this expected
+    // revision transactionally in beginApplication, so an apply built on a
+    // stale view returns { status: "conflict" } instead of overwriting the
+    // newer revision.
+    const displayedRevision = this.active.get(scopeKey)?.revision ?? 0;
     const groundedReadSet: TargetReadSet = {
       ...readSet,
-      preferenceRevision: currentPref?.revision ?? 0,
+      preferenceRevision: displayedRevision,
     };
+    // The candidate's real contract identity, data binding, and actions flow
+    // into the stored specification so startup revalidation compares the
+    // stored spec against the CURRENT contract version (a candidate
+    // generated under contractVersion 2 must never be stored as v1).
     const proposal = buildProposal(
       newId("prop"),
       entityKey,
       candidate.representation,
       candidate.properties,
       groundedReadSet,
-      scope
+      scope,
+      candidate.contractVersion,
+      candidate.dataBindingId,
+      candidate.actionIds
     );
     // Persist the immutable specification record before the transaction.
     await this.store.putSpecification({
@@ -362,7 +383,7 @@ export class PreferenceService {
         digest: candidate.digest,
         proposal,
         requiredRendererVersions: candidate.requiredRendererVersions,
-        contractVersion: 1,
+        contractVersion: candidate.contractVersion,
       },
       groundedReadSet,
       {
@@ -382,6 +403,11 @@ export class PreferenceService {
       // Notify other tabs (architecture section 9); BroadcastChannel does not
       // echo to this tab, and the local subscriber re-read is idempotent.
       this.broadcast.notifyCommit(prefKey);
+    } else if (result.status === "conflict") {
+      // Conflict detected at BEGIN or finalize time: the store still holds
+      // the WINNING record. Re-read it so the live view reflects the winning
+      // revision instead of the rejected proposal.
+      await this.handleRemoteCommit(prefKey);
     }
     return result;
   }
@@ -433,6 +459,8 @@ export class PreferenceService {
       }
 
       // Phase 1: record the pending change with the complete target read set.
+      // Expected revisions come from the LIVE VIEW (what the user saw), not
+      // from a fresh store read — same staleness rule as the single apply.
       const proposed: Record<string, { digest: string; requiredRendererVersions: Record<string, number> }> = {};
       for (const p of participants) {
         const scope = PreferenceService.scopeOf(p.scopeKey);
@@ -440,7 +468,7 @@ export class PreferenceService {
         const current = await this.store.getPreference(key);
         participantRecords.push({
           key,
-          previousRevision: current?.revision ?? 0,
+          previousRevision: this.active.get(p.scopeKey)?.revision ?? 0,
           previousDigest: current?.activeSpecificationDigest ?? null,
           proposedDigest: p.candidate.digest,
           contractVersion: p.candidate.contractVersion,
@@ -499,6 +527,14 @@ export class PreferenceService {
         if (current && participant && current.digest === participant.candidate.digest) {
           this.active.restore(scopeKey, null);
         }
+      }
+      // A stale live view is a CONFLICT (a competing writer moved the store),
+      // not a local failure: report it as such and re-read the winning state.
+      if (isRevisionConflict(error)) {
+        for (const { key, scopeKey } of prepared) {
+          await this.handleRemoteCommit(key);
+        }
+        return { status: "conflict", applicationId, reason };
       }
       return { status: "failed", applicationId, reason, failedScopeKey: prepared.at(-1)?.scopeKey };
     }
@@ -572,5 +608,76 @@ export class PreferenceService {
   async importBundle(json: string): Promise<{ imported: number; skipped: number }> {
     const bundle = JSON.parse(json) as Parameters<PreferenceStore["importBundle"]>[0];
     return this.store.importBundle(bundle);
+  }
+
+  /**
+   * Device sync (R2 stream B, architecture section 9): push this profile's
+   * local preferences to `${apiBaseUrl || ""}/v1/profiles/${profileId}/sync`
+   * and apply the authoritative bundle the server returns. The SyncManager
+   * is constructed per call on purpose — its sync bases and retained drafts
+   * are PERSISTED in the store, so a fresh manager resumes exactly where the
+   * previous one left off. When no API is reachable the failure is caught
+   * and reported (outbox entries are kept for a later retry). A transport
+   * can be injected for tests.
+   */
+  async syncNow(transportOverride?: SyncTransport): Promise<DeviceSyncResult> {
+    const transport: SyncTransport =
+      transportOverride ?? this.#fetchSyncTransport();
+    const manager = new SyncManager(this.store, transport, {
+      profileId: this.profileId,
+      projectId: PROJECT_ID,
+      deviceLabel: "reference-app-web",
+    });
+    try {
+      const result = await manager.syncNow();
+      // Divergent local specifications survive as recoverable drafts in the
+      // manager (and the store); surface them in the service's draft view.
+      for (const [identity, specification] of manager.drafts) {
+        const scopeKey = identity.slice(identity.indexOf(":") + 1);
+        if (!this.drafts.has(scopeKey)) {
+          this.drafts.set(scopeKey, {
+            reason: "divergent edit retained during device sync",
+            digest: specification.digest,
+          });
+        }
+      }
+      // The authoritative bundle may have changed any known scope: re-read
+      // the store so the live view reflects the winning (server) revision.
+      for (const scopeKey of this.#knownScopeKeys) {
+        const scope = PreferenceService.scopeOf(scopeKey);
+        await this.handleRemoteCommit(this.key(scope, scopeKey));
+      }
+      return { ok: true, synced: result.accepted.length, conflicts: result.retainedAsDraft.length };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** Fetch-based push transport for the API sync endpoint. */
+  #fetchSyncTransport(): SyncTransport {
+    const base = this.apiBaseUrl ?? "";
+    return {
+      push: async (bundle: SyncBundle): Promise<SyncMergeResult> => {
+        const token =
+          (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
+        const res = await fetch(
+          `${base}/v1/profiles/${encodeURIComponent(this.profileId)}/sync`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+            // The endpoint takes the bundle WITHOUT profileId (it is in the URL).
+            body: JSON.stringify({
+              projectId: bundle.projectId,
+              deviceLabel: bundle.deviceLabel,
+              pushedAt: bundle.pushedAt,
+              preferences: bundle.preferences,
+              specifications: bundle.specifications,
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`sync failed: HTTP ${res.status}`);
+        return (await res.json()) as SyncMergeResult;
+      },
+    };
   }
 }

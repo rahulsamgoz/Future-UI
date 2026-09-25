@@ -56,3 +56,16 @@
 .preview-layout.preview-stack { flex-direction: column; }
 .preview-layout.preview-grid { display: grid; grid-template-columns: repeat(var(--cols, 2), 1fr); }
 .preview-layout.preview-split { flex-direction: row; }
+
+.instruction-input {
+  width: 100%; margin-bottom: 8px; padding: 8px 10px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); font: inherit;
+}
+.reference-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.reference-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 8px; font-size: 0.75rem;
+}
+.origin-offline { color: var(--muted); border-color: var(--muted); }

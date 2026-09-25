@@ -75,10 +75,19 @@ describeE2E("managed runner pool journey (live app + real capture path)", () => 
     process.env.MANAGER_URL = `http://127.0.0.1:${port}`;
     managerUrl = process.env.MANAGER_URL;
 
+    // Durable publication (audit fix): the history API travels with the pool
+    // explicitly, so every child publishes and the run result only reports
+    // "captured" after publication is verified.
+    const historyApi = { baseUrl: HISTORY_API_URL, token: HISTORY_TOKEN, projectId: HISTORY_PROJECT };
+    process.env.HISTORY_API_URL = HISTORY_API_URL;
+    process.env.HISTORY_API_TOKEN = HISTORY_TOKEN;
+    process.env.HISTORY_API_PROJECT = HISTORY_PROJECT;
+
     pool = runPool(2, {
       managerUrl,
       token: MANAGER_TOKEN,
       appUrl: APP_URL,
+      historyApi,
       runnerEntry: RUNNER_ENTRY,
     });
   }, 30_000);
@@ -127,14 +136,146 @@ describeE2E("managed runner pool journey (live app + real capture path)", () => 
     }
 
     expect(run.status).toBe("succeeded");
-    const results = run.results as Array<{ scenarioId: string; status: string; captureId?: string; error?: string }>;
+    const results = run.results as Array<{ scenarioId: string; status: string; captureId?: string; artifactId?: string; error?: string }>;
     expect(results).toHaveLength(SCENARIOS.length);
+    const capturedIds: string[] = [];
     for (const scenarioId of SCENARIOS) {
       const entry = results.find((r) => r.scenarioId === scenarioId);
       expect(entry, `missing result for ${scenarioId}`).toBeDefined();
+      // "captured" now means durably published + verified (see the executor):
+      // without a reachable history API the scenario would honestly fail here.
       expect(entry?.status).toBe("captured");
       expect(entry?.captureId).toMatch(/^capture_/);
-      console.log(`  ${scenarioId}: captured as ${entry?.captureId}`);
+      capturedIds.push(entry!.captureId!);
+      console.log(`  ${scenarioId}: captured as ${entry?.captureId} (artifact ${entry?.artifactId})`);
+    }
+
+    // Publication evidence: every capture is retrievable from the history API.
+    const listResponse = await fetch(
+      `${HISTORY_API_URL.replace(/\/$/, "")}/v1/projects/${HISTORY_PROJECT}/captures`,
+      { headers: { authorization: `Bearer ${HISTORY_TOKEN}` } },
+    );
+    expect(listResponse.ok).toBe(true);
+    const { captures } = (await listResponse.json()) as { captures: Array<{ captureId: string }> };
+    for (const captureId of capturedIds) {
+      expect(captures.find((c) => c.captureId === captureId), `capture ${captureId} missing from history API`).toBeDefined();
     }
   }, 200_000);
+});
+
+/**
+ * Historical reconstruction through the managed path (audit P1: the scan path
+ * must actually reconstruct, and executors must durably publish). Gated on
+ * UI_INTEL_E2E=1 and a reachable history API (HISTORY_API_URL, default the
+ * dev API on :8787). The reference app is NOT needed: the runnable fixture
+ * corpus is reconstructed from git (worktree + static serve) and captured
+ * through the real capture path, with every capture durably published and
+ * verified before the scenario counts as captured.
+ */
+const HISTORY_API_URL = process.env.HISTORY_API_URL ?? "http://localhost:8787";
+const HISTORY_TOKEN = process.env.HISTORY_API_TOKEN ?? MANAGER_TOKEN;
+const HISTORY_PROJECT = process.env.HISTORY_API_PROJECT ?? "proj_reference_app";
+
+describeE2E("managed historical reconstruction (real publication)", () => {
+  let corpusDir = "";
+  let historyReachable = false;
+
+  beforeAll(async () => {
+    try {
+      const health = await fetch(`${HISTORY_API_URL.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(3000) });
+      historyReachable = health.ok;
+    } catch {
+      historyReachable = false;
+    }
+    if (!historyReachable) {
+      console.warn(`[skip reason] history API not reachable at ${HISTORY_API_URL}; start the dev API and re-run with UI_INTEL_E2E=1`);
+      return;
+    }
+    corpusDir = mkdtempSync(path.join(tmpdir(), "history-recon-e2e-"));
+    execFileSync("node", [path.join(REPO_ROOT, "fixtures", "history", "generate.mjs"), corpusDir], { encoding: "utf8" });
+  });
+
+  afterAll(() => {
+    if (corpusDir) {
+      try {
+        rmSync(corpusDir, { recursive: true, force: true });
+      } catch {
+        // best effort
+      }
+    }
+  });
+
+  it("reconstructs 2 buildable commits x 2 scenarios and verifies publication in the history API", async () => {
+    if (!historyReachable || !corpusDir) {
+      console.warn("[skip reason] history API not reachable; skipping reconstruction run");
+      return;
+    }
+    const { reconstructCommit } = await import("@ui-intelligence/capture");
+    const shas = execFileSync("git", ["-C", corpusDir, "log", "--reverse", "--format=%H"], { encoding: "utf8" })
+      .trim()
+      .split("\n");
+    const scenarios = ["catalog-default-desktop", "catalog-default-mobile"];
+
+    // Commit 1 (initial carousel) and commit 8 (split: chooser + sort control).
+    const capturedIds: string[] = [];
+    for (const index of [0, 7]) {
+      const result = await reconstructCommit({
+        repoDir: corpusDir,
+        commitSha: shas[index]!,
+        scenarios,
+        api: { baseUrl: HISTORY_API_URL, token: HISTORY_TOKEN, projectId: HISTORY_PROJECT },
+        onLog: (message) => console.log(`  ${message}`),
+      });
+      for (const scenario of result.scenarios) {
+        expect(scenario.outcome, `${scenario.scenarioId} @ commit ${index + 1}: ${scenario.error ?? ""}`).toBe("captured");
+        expect(scenario.captureId).toMatch(/^capture_/);
+        expect(scenario.occurrenceCount ?? 0).toBeGreaterThan(0);
+        capturedIds.push(scenario.captureId!);
+      }
+    }
+
+    // Durable publication: every capture is retrievable from the history API
+    // (GET /captures lists it, GET /captures/:id returns its manifest).
+    const listResponse = await fetch(
+      `${HISTORY_API_URL.replace(/\/$/, "")}/v1/projects/${HISTORY_PROJECT}/captures`,
+      { headers: { authorization: `Bearer ${HISTORY_TOKEN}` } },
+    );
+    expect(listResponse.ok).toBe(true);
+    const { captures } = (await listResponse.json()) as { captures: Array<{ captureId: string; commitSha: string }> };
+    for (const captureId of capturedIds) {
+      const stored = captures.find((c) => c.captureId === captureId);
+      expect(stored, `capture ${captureId} missing from history API`).toBeDefined();
+      const detail = await fetch(
+        `${HISTORY_API_URL.replace(/\/$/, "")}/v1/projects/${HISTORY_PROJECT}/captures/${captureId}`,
+        { headers: { authorization: `Bearer ${HISTORY_TOKEN}` } },
+      );
+      expect(detail.ok).toBe(true);
+    }
+    console.log(`reconstructed captures published and verified: ${capturedIds.join(", ")}`);
+  }, 300_000);
+
+  it("records the intentionally unbuildable commit as an expected failure", async () => {
+    if (!historyReachable || !corpusDir) {
+      console.warn("[skip reason] history API not reachable; skipping unbuildable run");
+      return;
+    }
+    const { reconstructCommit } = await import("@ui-intelligence/capture");
+    const shas = execFileSync("git", ["-C", corpusDir, "log", "--reverse", "--format=%H"], { encoding: "utf8" })
+      .trim()
+      .split("\n");
+    const result = await reconstructCommit({
+      repoDir: corpusDir,
+      commitSha: shas[11]!, // commit 12: INTENTIONALLY_UNBUILDABLE
+      scenarios: ["catalog-default-desktop"],
+      api: { baseUrl: HISTORY_API_URL, token: HISTORY_TOKEN, projectId: HISTORY_PROJECT },
+      onLog: (message) => console.log(`  ${message}`),
+    });
+    expect(result.intentionallyUnbuildable).toBe(true);
+    for (const scenario of result.scenarios) {
+      expect(scenario.outcome).toBe("expected_failure");
+      expect(scenario.error).toBeTruthy();
+      expect(scenario.captureId).toBeUndefined();
+    }
+    console.log(`unbuildable commit recorded as expected_failure for ${result.scenarios.length} scenario(s)`);
+  }, 120_000);
 });

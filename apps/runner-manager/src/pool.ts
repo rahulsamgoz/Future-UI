@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runWorkerLoop } from "./worker.js";
 import type { RunExecutor } from "./executor.js";
+import type { UploadApi } from "@ui-intelligence/capture";
 
 const RESPAWN_DELAY_MS = 2000;
 
@@ -26,6 +27,13 @@ export type PoolOptions = {
   token?: string;
   /** App under capture (passed to workers as APP_URL). */
   appUrl: string;
+  /**
+   * History API for durable publication — passed to children as
+   * HISTORY_API_URL/TOKEN/PROJECT env (and to embedded executors directly).
+   * Publication is REQUIRED: workers report a scenario as captured only after
+   * its capture is durably published and verified.
+   */
+  historyApi?: UploadApi;
   /** Override the capture-runner entrypoint (default: sibling app dist). */
   runnerEntry?: string;
   /** When set the pool runs embedded in-process workers instead of children. */
@@ -58,6 +66,16 @@ function runChildSlot(index: number, count: number, opts: PoolOptions, children:
       RUNNER_MANAGER_URL: opts.managerUrl,
       RUNNER_TOKEN: opts.token ?? process.env.RUNNER_TOKEN ?? "dev-token",
       APP_URL: opts.appUrl,
+      // Explicit publication config (audit fix): workers must publish durably,
+      // so the history API travels with the spawn rather than relying on
+      // inherited env alone.
+      ...(opts.historyApi
+        ? {
+            HISTORY_API_URL: opts.historyApi.baseUrl,
+            HISTORY_API_TOKEN: opts.historyApi.token,
+            HISTORY_API_PROJECT: opts.historyApi.projectId,
+          }
+        : {}),
       WORKER_SLOT: String(index),
       POOL_SIZE: String(count),
     },
@@ -93,6 +111,7 @@ export function runPool(count: number, opts: PoolOptions): PoolHandle {
           token: opts.token,
           executor: opts.executor,
           appUrl: opts.appUrl,
+          historyApi: opts.historyApi,
           heartbeatMs: opts.heartbeatMs,
           pollMs: opts.pollMs,
           signal,

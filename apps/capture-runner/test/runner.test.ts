@@ -90,10 +90,14 @@ type Recorder = {
   deps: CaptureJobDeps;
 };
 
-function makeDeps(isCancelling: () => boolean = () => false): Recorder {
+function makeDeps(isCancelling: () => boolean = () => false): Recorder & { setServerJobStatus: (status: JobRecord["status"]) => void } {
   const calls: string[] = [];
+  let serverJobStatus: JobRecord["status"] = job.status;
   return {
     calls,
+    setServerJobStatus: (status) => {
+      serverJobStatus = status;
+    },
     deps: {
       apiBaseUrl: "http://api:4000",
       token: "t",
@@ -118,11 +122,15 @@ function makeDeps(isCancelling: () => boolean = () => false): Recorder {
         async heartbeat(jobId, leaseToken) {
           calls.push(`heartbeat:${jobId}:${leaseToken}`);
         },
-        async complete(jobId, result) {
-          calls.push(`complete:${jobId}:${result.result.captureId}`);
+        async complete(jobId, leaseToken, result) {
+          calls.push(`complete:${jobId}:${leaseToken}:${result.result.captureId}`);
         },
         async cancelled(jobId, body) {
           calls.push(`cancelled:${jobId}:${body.reason}`);
+        },
+        async getJob(jobId) {
+          calls.push(`getJob:${jobId}`);
+          return { ...job, status: serverJobStatus };
         },
       },
       isCancelling,
@@ -135,10 +143,22 @@ describe("executeCaptureJob", () => {
     const { deps, calls } = makeDeps();
     const outcome = await executeCaptureJob(job, deps);
     expect(outcome).toEqual({ status: "completed", captureId: "capture_server_1" });
-    expect(calls[0]).toBe("claim:job-1");
-    expect(calls[1]).toBe("run:catalog-default-desktop:http://app:5173");
-    expect(calls[2]).toBe("upload:capture_local_1:3:proj-1");
-    expect(calls[3]).toBe("complete:job-1:capture_server_1");
+    expect(calls[0]).toBe("getJob:job-1");
+    expect(calls[1]).toBe("claim:job-1");
+    expect(calls[2]).toBe("run:catalog-default-desktop:http://app:5173");
+    expect(calls[3]).toBe("upload:capture_local_1:3:proj-1");
+    expect(calls[4]).toBe("complete:job-1:lease-1:capture_server_1");
+  });
+
+  it("skips a job that is already terminal before claiming", async () => {
+    const { deps, calls, setServerJobStatus } = makeDeps();
+    setServerJobStatus("cancelled");
+    const cancelledJob = { ...job, status: "cancelled" as const };
+    const outcome = await executeCaptureJob(cancelledJob, deps);
+    expect(outcome).toEqual({ status: "skipped", captureId: null });
+    expect(calls).toEqual(["getJob:job-1"]);
+    expect(calls.some((c) => c.startsWith("claim:"))).toBe(false);
+    expect(calls.some((c) => c.startsWith("upload:"))).toBe(false);
   });
 
   it("posts cancelled when a shutdown signal arrived during capture", async () => {

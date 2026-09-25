@@ -3,13 +3,13 @@
  * sha-256 digest; ObjectStore verifies digests and delegates byte storage to
  * a pluggable StorageDriver (fs default, S3 optional).
  *
- * The driver contract is synchronous per the dev-profile reference design:
- * FsStorageDriver is genuinely synchronous; S3StorageDriver issues the real
- * SDK commands (put awaits the upload and returns its promise) while
- * get/exists are answered from a write-through cache of the current process
- * — cold keys that were never written by this process report missing. A
- * production deployment would replace the sync reads with presigned URLs or
- * an async driver API; the dev profile keeps the single sync seam.
+ * The driver contract is async-first (audit fix, finding 4): every method
+ * returns a Promise and the S3 driver issues REAL SDK commands for all four
+ * operations — Get/Head/Delete are no longer answered from a per-process
+ * write-through cache, so bytes written by one process are readable by
+ * another and object durability matches the remote store. ObjectStore awaits
+ * the driver end to end; callers (artifact upload/read routes, resolve
+ * grounding, GC) await it in turn.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -24,15 +24,15 @@ import {
 import { UiIntelligenceError } from "@ui-intelligence/protocol";
 
 /**
- * Byte-storage seam (R2 stream G). `key` is driver-relative (e.g.
- * "ab/ab34…" under the fs root or the S3 prefix). ObjectStore owns digest
- * verification and key computation.
+ * Byte-storage seam (R2 stream G, async contract). `key` is driver-relative
+ * (e.g. "ab/ab34…" under the fs root or the S3 prefix). ObjectStore owns
+ * digest verification and key computation.
  */
 export interface StorageDriver {
-  put(key: string, bytes: Uint8Array): Promise<void> | void;
-  get(key: string): Uint8Array | null;
-  delete(key: string): void;
-  exists(key: string): boolean;
+  put(key: string, bytes: Uint8Array): Promise<void>;
+  get(key: string): Promise<Uint8Array | null>;
+  delete(key: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
 }
 
 /** Filesystem driver: digest-sharded layout <root>/<xx>/<digest> (R1 layout, unchanged). */
@@ -48,13 +48,13 @@ export class FsStorageDriver implements StorageDriver {
     return this.#root;
   }
 
-  put(key: string, bytes: Uint8Array): void {
+  async put(key: string, bytes: Uint8Array): Promise<void> {
     const path = join(this.#root, key);
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, bytes);
   }
 
-  get(key: string): Uint8Array | null {
+  async get(key: string): Promise<Uint8Array | null> {
     try {
       return readFileSync(join(this.#root, key));
     } catch {
@@ -62,7 +62,7 @@ export class FsStorageDriver implements StorageDriver {
     }
   }
 
-  delete(key: string): void {
+  async delete(key: string): Promise<void> {
     try {
       rmSync(join(this.#root, key), { force: true });
     } catch {
@@ -70,7 +70,7 @@ export class FsStorageDriver implements StorageDriver {
     }
   }
 
-  exists(key: string): boolean {
+  async exists(key: string): Promise<boolean> {
     return existsSync(join(this.#root, key));
   }
 }
@@ -90,19 +90,44 @@ export type S3StorageDriverOptions = {
   region?: string;
 };
 
+/** True for the SDK's "key absent" errors (GetObject NoSuchKey, HeadObject NotFound, 404 status). */
+function isKeyAbsent(error: unknown): boolean {
+  const err = error as { name?: string; Code?: string; code?: string; $metadata?: { httpStatusCode?: number } };
+  return (
+    err?.name === "NoSuchKey" ||
+    err?.name === "NotFound" ||
+    err?.Code === "NoSuchKey" ||
+    err?.Code === "NotFound" ||
+    err?.code === "NoSuchKey" ||
+    err?.code === "NotFound" ||
+    err?.$metadata?.httpStatusCode === 404
+  );
+}
+
+/** Buffer an SDK object Body (Node stream or transformToByteArray-shaped) into bytes. */
+async function readBody(body: unknown): Promise<Uint8Array> {
+  if (body === null || body === undefined) return new Uint8Array(0);
+  const shaped = body as { transformToByteArray?: () => Promise<Uint8Array> };
+  if (typeof shaped.transformToByteArray === "function") {
+    return shaped.transformToByteArray();
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<unknown>) {
+    chunks.push(Buffer.from(chunk as Uint8Array));
+  }
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
 /**
- * S3 driver (AWS SDK v3). put() uploads asynchronously and returns the
- * upload promise so durable callers can await it; get/exists are answered
- * from the write-through cache (see module doc); delete issues a
- * DeleteObjectCommand and drops the cached copy.
+ * S3 driver (AWS SDK v3). All four operations issue the real SDK command and
+ * await it: put uploads, get fetches and buffers the Body (null on NoSuchKey),
+ * exists HEADs (false on NotFound), delete issues DeleteObjectCommand and
+ * propagates errors. No per-process cache: state lives in the bucket.
  */
 export class S3StorageDriver implements StorageDriver {
   readonly #bucket: string;
   readonly #prefix: string;
   readonly #client: S3LikeClient;
-  // Write-through cache: bytes written (or successfully HEADed) by this
-  // process, keyed by the full S3 key.
-  readonly #cache = new Map<string, Uint8Array>();
 
   constructor(options: S3StorageDriverOptions) {
     this.#bucket = options.bucket;
@@ -123,28 +148,36 @@ export class S3StorageDriver implements StorageDriver {
     return `${this.#prefix}${key}`;
   }
 
-  put(key: string, bytes: Uint8Array): Promise<void> {
-    const fullKey = this.fullKey(key);
-    this.#cache.set(fullKey, bytes);
-    return this.#client.send(
-      new PutObjectCommand({ Bucket: this.#bucket, Key: fullKey, Body: bytes }),
-    ).then(() => undefined);
+  async put(key: string, bytes: Uint8Array): Promise<void> {
+    await this.#client.send(
+      new PutObjectCommand({ Bucket: this.#bucket, Key: this.fullKey(key), Body: bytes }),
+    );
   }
 
-  get(key: string): Uint8Array | null {
-    return this.#cache.get(this.fullKey(key)) ?? null;
+  async get(key: string): Promise<Uint8Array | null> {
+    try {
+      const output = (await this.#client.send(
+        new GetObjectCommand({ Bucket: this.#bucket, Key: this.fullKey(key) }),
+      )) as { Body?: unknown };
+      return await readBody(output?.Body);
+    } catch (error) {
+      if (isKeyAbsent(error)) return null;
+      throw error;
+    }
   }
 
-  delete(key: string): void {
-    const fullKey = this.fullKey(key);
-    this.#cache.delete(fullKey);
-    // Fire-and-forget: deletion is idempotent and the cache keeps the
-    // synchronous contract; errors surface on the next process log.
-    void this.#client.send(new DeleteObjectCommand({ Bucket: this.#bucket, Key: fullKey })).catch(() => undefined);
+  async delete(key: string): Promise<void> {
+    await this.#client.send(new DeleteObjectCommand({ Bucket: this.#bucket, Key: this.fullKey(key) }));
   }
 
-  exists(key: string): boolean {
-    return this.#cache.has(this.fullKey(key));
+  async exists(key: string): Promise<boolean> {
+    try {
+      await this.#client.send(new HeadObjectCommand({ Bucket: this.#bucket, Key: this.fullKey(key) }));
+      return true;
+    } catch (error) {
+      if (isKeyAbsent(error)) return false;
+      throw error;
+    }
   }
 }
 
@@ -189,9 +222,10 @@ export function createStorageDriver(options: {
 }
 
 /**
- * Digest-verified object store facade. The public API is unchanged from R1;
- * byte storage is delegated to a StorageDriver. `delete`/`exists` support
- * reference-aware garbage collection (R2 stream G).
+ * Digest-verified object store facade. All operations are async end to end
+ * (audit fix, finding 4): the fs driver stays genuinely synchronous inside
+ * its promises; the s3 driver performs real round trips. `delete`/`exists`
+ * support reference-aware garbage collection (R2 stream G).
  */
 export class ObjectStore {
   readonly #driver: StorageDriver;
@@ -209,8 +243,8 @@ export class ObjectStore {
     return `${digest.slice(0, 2)}/${digest}`;
   }
 
-  /** Store bytes under their digest; throws when the digest does not match. */
-  put(digest: string, bytes: Buffer): { key: string; byteSize: number; persisted?: Promise<void> } {
+  /** Store bytes under their digest; rejects when the digest does not match. */
+  async put(digest: string, bytes: Buffer): Promise<{ key: string; byteSize: number }> {
     const actual = ObjectStore.sha256(bytes);
     if (actual !== digest) {
       throw new UiIntelligenceError("SCHEMA_INVALID", `artifact digest mismatch: expected ${digest}, got ${actual}`, {
@@ -218,21 +252,21 @@ export class ObjectStore {
       });
     }
     const key = ObjectStore.keyFor(digest);
-    const persisted = this.#driver.put(key, bytes);
-    return { key, byteSize: bytes.byteLength, ...(persisted instanceof Promise ? { persisted } : {}) };
+    await this.#driver.put(key, bytes);
+    return { key, byteSize: bytes.byteLength };
   }
 
-  get(digest: string): Buffer | null {
-    const bytes = this.#driver.get(ObjectStore.keyFor(digest));
+  async get(digest: string): Promise<Buffer | null> {
+    const bytes = await this.#driver.get(ObjectStore.keyFor(digest));
     return bytes === null ? null : Buffer.from(bytes);
   }
 
-  /** Remove object bytes (garbage collection). Idempotent. */
-  delete(digest: string): void {
-    this.#driver.delete(ObjectStore.keyFor(digest));
+  /** Remove object bytes (garbage collection). Idempotent; errors propagate. */
+  async delete(digest: string): Promise<void> {
+    await this.#driver.delete(ObjectStore.keyFor(digest));
   }
 
-  exists(digest: string): boolean {
+  async exists(digest: string): Promise<boolean> {
     return this.#driver.exists(ObjectStore.keyFor(digest));
   }
 }

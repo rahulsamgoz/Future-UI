@@ -16,6 +16,15 @@ export type OpenAICompatOptions = {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  /**
+   * Declared provider capabilities. Vision input is opt-in: image references
+   * are attached as image_url content parts ONLY when `capabilities.vision`
+   * is true AND the grounded reference carries a fetchable `url`. The default
+   * dev model (space-bunny-free) is text-only, so it stays undeclared and the
+   * grounded TEXT summary (real observation content) is the deliverable —
+   * vision is never faked for text-only providers.
+   */
+  capabilities?: { vision?: boolean };
 };
 
 function stripFences(content: string): string {
@@ -44,7 +53,7 @@ export class OpenAICompatProvider implements ModelProvider {
             model: this.options.model,
             messages: [
               { role: "system", content: systemPrompt(input) },
-              { role: "user", content: userPrompt(input) },
+              { role: "user", content: this.userContent(input) },
             ],
             temperature: 0.7,
           }),
@@ -69,6 +78,22 @@ export class OpenAICompatProvider implements ModelProvider {
       const message = error instanceof Error ? error.message : String(error);
       return { candidates: [], degraded: `model provider unavailable: ${message}` };
     }
+  }
+
+  /**
+   * Text-first by default. When the provider declares vision AND grounded
+   * image references carry fetchable URLs, they are attached as image_url
+   * parts after the text prompt (which still carries the grounded summaries).
+   */
+  private userContent(
+    input: ProviderInput
+  ): string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> {
+    if (!this.options.capabilities?.vision) return userPrompt(input);
+    const images = input.references
+      .filter((r) => r.kind === "image" && typeof r.url === "string" && r.url.length > 0)
+      .map((r) => ({ type: "image_url" as const, image_url: { url: r.url as string } }));
+    if (images.length === 0) return userPrompt(input);
+    return [{ type: "text", text: userPrompt(input) }, ...images];
   }
 
   /** Keep only candidates whose type and properties fit the renderer schemas. */
@@ -154,12 +179,15 @@ export function parseCandidates(content: string): ProviderCandidate[] {
 
 /** Build a provider from the UI_INTEL_MODEL_* environment variables. */
 export function providerFromEnv(env: NodeJS.ProcessEnv = process.env): ModelProvider {
-  const { UI_INTEL_MODEL_BASE_URL, UI_INTEL_MODEL_API_KEY, UI_INTEL_MODEL_NAME } = env;
+  const { UI_INTEL_MODEL_BASE_URL, UI_INTEL_MODEL_API_KEY, UI_INTEL_MODEL_NAME, UI_INTEL_MODEL_VISION } = env;
   if (UI_INTEL_MODEL_BASE_URL && UI_INTEL_MODEL_API_KEY && UI_INTEL_MODEL_NAME) {
     return new OpenAICompatProvider({
       baseUrl: UI_INTEL_MODEL_BASE_URL,
       apiKey: UI_INTEL_MODEL_API_KEY,
       model: UI_INTEL_MODEL_NAME,
+      // Vision stays undeclared unless the operator explicitly opts in;
+      // space-bunny-free (the dev model) is text-only.
+      capabilities: UI_INTEL_MODEL_VISION === "1" || UI_INTEL_MODEL_VISION === "true" ? { vision: true } : undefined,
     });
   }
   // Deterministic provider is the default dev provider (spec section 8).

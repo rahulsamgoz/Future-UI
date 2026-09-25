@@ -62,6 +62,10 @@ export class MemoryPreferenceStore implements PreferenceStore {
     this.#specifications.set(record.digest, { ...record });
   }
 
+  async listSpecifications(): Promise<SpecificationRecord[]> {
+    return [...this.#specifications.values()].map((record) => ({ ...record }));
+  }
+
   async beginApplication(
     applicationId: string,
     participants: ApplicationParticipantInput[],
@@ -90,6 +94,7 @@ export class MemoryPreferenceStore implements PreferenceStore {
         previousRevision: p.previousRevision,
         previousDigest: p.previousDigest,
         proposedDigest: p.proposedDigest,
+        ...(p.contractVersion !== undefined ? { contractVersion: p.contractVersion } : {}),
       })),
     };
     this.#applications.set(applicationId, record);
@@ -145,7 +150,11 @@ export class MemoryPreferenceStore implements PreferenceStore {
         key: { ...participant.key },
         activeSpecificationDigest: participant.proposedDigest,
         revision,
-        contractVersion: existingContractVersions.get(identity) ?? 0,
+        // The contract identity of the APPLIED specification wins; fall back
+        // to the previous record's value (then 0) for participants that do
+        // not carry one.
+        contractVersion:
+          participant.contractVersion ?? existingContractVersions.get(identity) ?? 0,
         updatedAt: nowIso(),
       });
     }

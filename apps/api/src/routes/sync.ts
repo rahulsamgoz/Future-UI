@@ -1,14 +1,18 @@
 /**
  * Device preference sync endpoint (R2 stream B, architecture section 9).
- * Auth: the project is derived from the body projectId (id or name); every
- * authenticated principal is allowed in the dev profile (single-token dev
- * auth verifies the caller; the opaque profileId is never an authorization
- * input).
+ * Auth (audit fix, finding 1): profiles are bound to the principal that first
+ * synced them. A `sync_profiles` row records ownership at first use; a
+ * DIFFERENT principal gets 403 FORBIDDEN. The dev operator principal may
+ * access any profile. The project derived from the body still requires
+ * membership: ≥ viewer for a pull (no pushed preference records), ≥ member
+ * for a write (any pushed preference records).
  */
 import { UiIntelligenceError } from "@ui-intelligence/protocol";
 import type { SpecificationRecord, SyncBundle } from "@ui-intelligence/protocol";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
+import { nowIso } from "../db.js";
+import { requireRole } from "../authz.js";
 import { mergeSyncBundle, syncBundleSchema } from "../sync.js";
 
 export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promise<void> {
@@ -18,6 +22,10 @@ export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promis
     const profileId = (request.params as { profileId: string }).profileId;
     if (!profileId || profileId.length > 500) {
       throw new UiIntelligenceError("SCHEMA_INVALID", "profileId is required", { httpStatus: 422 });
+    }
+    const principal = request.principal;
+    if (!principal) {
+      throw new UiIntelligenceError("UNAUTHORIZED", "missing principal", { httpStatus: 401 });
     }
     const parsed = syncBundleSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -37,6 +45,26 @@ export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promis
       specifications: parsed.data.specifications as unknown as SpecificationRecord[],
     };
 
+    // Profile ownership: the first principal to sync a profile registers it;
+    // other (non-operator) principals are denied — profiles are never shared
+    // namespace across users.
+    if (!principal.operator) {
+      const owner = db
+        .prepare("SELECT owner_user_id FROM sync_profiles WHERE profile_id = ?")
+        .get(profileId) as { owner_user_id: string } | undefined;
+      if (!owner) {
+        db.prepare(
+          "INSERT OR IGNORE INTO sync_profiles (profile_id, owner_user_id, created_at) VALUES (?, ?, ?)"
+        ).run(profileId, principal.userId, nowIso());
+      } else if (owner.owner_user_id !== principal.userId) {
+        throw new UiIntelligenceError(
+          "FORBIDDEN",
+          `profile ${profileId} belongs to another principal`,
+          { httpStatus: 403 },
+        );
+      }
+    }
+
     // Project derived from the BODY (not the profile): accept the stored id
     // or the project name, consistent with every :p route.
     const project = db
@@ -47,8 +75,14 @@ export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promis
     }
     bundle.projectId = project.id;
 
-    // Dev profile membership: the auth hook already verified the principal;
-    // all authenticated principals may sync their own profile namespace.
+    // Project membership from the ROW's project: a pull (no pushed records)
+    // needs viewer; any pushed record is a write and needs member.
+    const minimum = bundle.preferences.length > 0 ? "member" : "viewer";
+    const check = requireRole(principal, project.id, minimum);
+    if (!check.ok) {
+      throw new UiIntelligenceError("FORBIDDEN", check.reason, { httpStatus: 403 });
+    }
+
     return mergeSyncBundle(db, profileId, bundle);
   });
 }

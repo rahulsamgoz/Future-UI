@@ -594,6 +594,7 @@ describe("OperationCoordinator", () => {
   });
 
   it("returns conflict without touching the UI when the revision moved", async () => {
+
     const base = new MemoryPreferenceStore();
     const coordinator = new OperationCoordinator();
     // Simulate a competing tab bumping the revision between the coordinator's
@@ -623,6 +624,43 @@ describe("OperationCoordinator", () => {
     const result = await coordinator.apply(store, prefKey, specification, { preferenceRevision: 0 }, switcher());
     expect(result.status).toBe("conflict");
     expect((await base.getPreference(prefKey))?.activeSpecificationDigest).toBe("spec_competing");
+  });
+
+  it("rejects an apply whose read set predates the store's current revision (audit defect 1)", async () => {
+    const store = new MemoryPreferenceStore();
+    const coordinator = new OperationCoordinator();
+    // Revision 3 was written externally (another tab, device sync) AFTER the
+    // caller read the store: the read set still says revision 0.
+    await store.setPreference({
+      key: prefKey,
+      activeSpecificationDigest: "spec_winning",
+      revision: 3,
+      contractVersion: 1,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const result = await coordinator.apply(store, prefKey, specification, { preferenceRevision: 0 }, switcher());
+    expect(result.status).toBe("conflict");
+    // The newer revision and its digest survive untouched.
+    const record = await store.getPreference(prefKey);
+    expect(record?.revision).toBe(3);
+    expect(record?.activeSpecificationDigest).toBe("spec_winning");
+  });
+
+  it("applies when the read set matches the current revision and bumps to expected+1", async () => {
+    const store = new MemoryPreferenceStore();
+    const coordinator = new OperationCoordinator();
+    await store.setPreference({
+      key: prefKey,
+      activeSpecificationDigest: "spec_current",
+      revision: 3,
+      contractVersion: 1,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+    const result = await coordinator.apply(store, prefKey, specification, { preferenceRevision: 3 }, switcher());
+    expect(result.status).toBe("active");
+    const record = await store.getPreference(prefKey);
+    expect(record?.revision).toBe(4);
+    expect(record?.activeSpecificationDigest).toBe("spec_grid");
   });
 
   it("undo reports a conflict when another operation moved the revision", async () => {

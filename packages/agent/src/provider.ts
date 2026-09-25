@@ -27,6 +27,21 @@ export type ProviderTargetContract = {
 export type ProviderReference = {
   kind: "history" | "image" | "text";
   summary: string;
+  /**
+   * Grounded observation content (history references): the real captured
+   * visible text. Text-first providers consume this via the summary/text;
+   * it is never a placeholder string when a reference loader ran.
+   */
+  text?: string;
+  /** Grounded artifact id: the capture's screenshot (history) or the image itself. */
+  artifactId?: string;
+  /**
+   * Fetchable URL for the artifact (e.g. presigned/public). Populated only
+   * when the caller's reference loader can produce one. Vision-declaring
+   * providers attach it as an image_url part; the text-first path (e.g. the
+   * text-only space-bunny-free model) never requires it and stays default.
+   */
+  url?: string;
 };
 
 export type ProviderInput = {

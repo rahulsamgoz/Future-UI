@@ -68,22 +68,22 @@ function seedBuilds(db: Db, oldBuildId: string, currentBuildId: string): void {
 }
 
 /** Standard 5-artifact fixture; returns artifact digests keyed by short name. */
-function seedStandard(db: Db, store: ObjectStore): Record<string, string> {
+async function seedStandard(db: Db, store: ObjectStore): Promise<Record<string, string>> {
   seedProject(db);
   seedBuilds(db, "build_old", "build_new");
   const bytes = (marker: string) => Buffer.from(`png-bytes-${marker}`);
   const digests: Record<string, string> = {};
-  const put = (name: string, createdAt: string, id: string): void => {
+  const put = async (name: string, createdAt: string, id: string): Promise<void> => {
     const b = bytes(name);
     digests[name] = ObjectStore.sha256(b);
-    store.put(digests[name], b);
+    await store.put(digests[name], b);
     seedArtifact(db, id, createdAt, digests[name]);
   };
-  put("freshRef", FRESH, "art_fresh_ref"); // referenced, fresh capture → kept
-  put("oldRef", OLD, "art_old_ref"); // referenced by old capture → deleted
-  put("orphanOld", OLD, "art_orphan_old"); // no reference, old → deleted
-  put("orphanFresh", FRESH, "art_orphan_fresh"); // no reference, fresh → kept
-  put("currentBuild", OLD, "art_current_build"); // old ref on CURRENT build → kept
+  await put("freshRef", FRESH, "art_fresh_ref"); // referenced, fresh capture → kept
+  await put("oldRef", OLD, "art_old_ref"); // referenced by old capture → deleted
+  await put("orphanOld", OLD, "art_orphan_old"); // no reference, old → deleted
+  await put("orphanFresh", FRESH, "art_orphan_fresh"); // no reference, fresh → kept
+  await put("currentBuild", OLD, "art_current_build"); // old ref on CURRENT build → kept
 
   seedCapture(db, "cap_old_ref", "build_old", OLD, ["art_old_ref"], []);
   seedCapture(db, "cap_fresh_ref", "build_new", FRESH, ["art_fresh_ref"], []);
@@ -95,12 +95,12 @@ function seedStandard(db: Db, store: ObjectStore): Record<string, string> {
 describe("runGc", () => {
   let fixture: Fixture;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-gc-"));
     const db = openDb(join(dir, "gc.sqlite"));
     migrate(db);
     const store = new ObjectStore(join(dir, "artifacts"));
-    seedStandard(db, store);
+    await seedStandard(db, store);
     fixture = { db, store, dir, cleanup: () => db.close() };
   });
 
@@ -108,8 +108,8 @@ describe("runGc", () => {
     fixture.cleanup();
   });
 
-  it("deletes old-referenced and old-orphan artifacts, keeps fresh and current-build ones", () => {
-    const result = runGc(fixture.db, fixture.store, { now: NOW, retentionDays: RETENTION_DAYS });
+  it("deletes old-referenced and old-orphan artifacts, keeps fresh and current-build ones", async () => {
+    const result = await runGc(fixture.db, fixture.store, { now: NOW, retentionDays: RETENTION_DAYS });
 
     expect(result.scanned).toBe(5);
     expect(result.planned.map((d) => d.artifactId).sort()).toEqual(["art_old_ref", "art_orphan_old"]);
@@ -119,8 +119,8 @@ describe("runGc", () => {
     // Rows are gone; bytes are gone from the object store.
     const remaining = fixture.db.prepare("SELECT id FROM artifacts ORDER BY id").all().map((r) => (r as { id: string }).id);
     expect(remaining.sort()).toEqual(["art_current_build", "art_fresh_ref", "art_orphan_fresh"]);
-    expect(fixture.store.exists(result.planned[0].digest)).toBe(false);
-    expect(fixture.store.get(result.planned[1].digest)).toBeNull();
+    expect(await fixture.store.exists(result.planned[0].digest)).toBe(false);
+    expect(await fixture.store.get(result.planned[1].digest)).toBeNull();
 
     // The run is recorded.
     const run = fixture.db.prepare("SELECT deleted_count, dry_run, error FROM gc_runs").get() as {
@@ -133,24 +133,24 @@ describe("runGc", () => {
     expect(run.error).toBeNull();
   });
 
-  it("dryRun classifies without deleting anything", () => {
+  it("dryRun classifies without deleting anything", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-gc-dry-"));
     const db = openDb(join(dir, "gc.sqlite"));
     migrate(db);
     const store = new ObjectStore(join(dir, "artifacts"));
-    seedStandard(db, store);
+    await seedStandard(db, store);
 
-    const result = runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS, dryRun: true });
+    const result = await runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS, dryRun: true });
     expect(result.planned.map((d) => d.artifactId).sort()).toEqual(["art_old_ref", "art_orphan_old"]);
     expect(result.deleted).toEqual([]);
     expect(result.dryRun).toBe(true);
     // Nothing changed.
     expect(db.prepare("SELECT COUNT(*) AS n FROM artifacts").get()).toMatchObject({ n: 5 });
-    expect(store.exists((result.planned[0] as { digest: string }).digest)).toBe(true);
+    expect(await store.exists((result.planned[0] as { digest: string }).digest)).toBe(true);
     db.close();
   });
 
-  it("aborts with a safety error when deletion would remove more than 50% of artifacts, unless forced", () => {
+  it("aborts with a safety error when deletion would remove more than 50% of artifacts, unless forced", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-gc-abort-"));
     const db = openDb(join(dir, "gc.sqlite"));
     migrate(db);
@@ -158,16 +158,16 @@ describe("runGc", () => {
     seedProject(db);
     const bytes = Buffer.from("old-bytes");
     const digest = ObjectStore.sha256(bytes);
-    store.put(digest, bytes);
+    await store.put(digest, bytes);
     seedArtifact(db, "art_old_1", OLD, digest);
     seedArtifact(db, "art_old_2", OLD, digest); // both old orphans → 2/2 > 50%
 
-    expect(() => runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS })).toThrowError(
+    await expect(runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS })).rejects.toThrowError(
       /gc safety abort.*more than 50%/,
     );
     // Nothing was deleted by the aborted run.
     expect(db.prepare("SELECT COUNT(*) AS n FROM artifacts").get()).toMatchObject({ n: 2 });
-    expect(store.exists(digest)).toBe(true);
+    expect(await store.exists(digest)).toBe(true);
     // The abort is recorded with the error.
     const aborted = db.prepare("SELECT error, deleted_count FROM gc_runs ORDER BY started_at").all() as Array<{
       error: string | null;
@@ -176,14 +176,14 @@ describe("runGc", () => {
     expect(aborted[0].error).toMatch(/gc safety abort/);
 
     // Forced run deletes.
-    const forced = runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS, force: true });
+    const forced = await runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS, force: true });
     expect(forced.deleted).toHaveLength(2);
     expect(db.prepare("SELECT COUNT(*) AS n FROM artifacts").get()).toMatchObject({ n: 0 });
-    expect(store.exists(digest)).toBe(false);
+    expect(await store.exists(digest)).toBe(false);
     db.close();
   });
 
-  it("keeps artifacts whose latest reference is within retention even if an older reference exists", () => {
+  it("keeps artifacts whose latest reference is within retention even if an older reference exists", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-gc-latest-"));
     const db = openDb(join(dir, "gc.sqlite"));
     migrate(db);
@@ -192,14 +192,14 @@ describe("runGc", () => {
     seedBuilds(db, "build_old", "build_cur");
     const bytes = Buffer.from("twice-referenced");
     const digest = ObjectStore.sha256(bytes);
-    store.put(digest, bytes);
+    await store.put(digest, bytes);
     seedArtifact(db, "art_twice", OLD, digest);
     seedCapture(db, "cap_old", "build_old", OLD, ["art_twice"], []);
     seedCapture(db, "cap_new", "build_cur", FRESH, ["art_twice"], []); // latest reference is fresh
 
-    const result = runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS });
+    const result = await runGc(db, store, { now: NOW, retentionDays: RETENTION_DAYS });
     expect(result.planned).toEqual([]);
-    expect(store.exists(digest)).toBe(true);
+    expect(await store.exists(digest)).toBe(true);
     db.close();
   });
 });
@@ -222,7 +222,7 @@ describe("POST /v1/projects/:p/gc", () => {
       db.prepare("INSERT OR IGNORE INTO builds (id, project_id, commit_sha, artifact_digest, outcome, created_at) VALUES ('build_cur', ?, 'new0000', 'd1', 'succeeded', ?)").run(PROJECT, freshAt);
       const bytes = Buffer.from("api-gc-bytes");
       const digest = ObjectStore.sha256(bytes);
-      store.put(digest, bytes);
+      await store.put(digest, bytes);
       seedArtifact(db, "art_api_old", oldAt, digest);
       seedArtifact(db, "art_api_fresh", freshAt, digest);
 
@@ -237,7 +237,7 @@ describe("POST /v1/projects/:p/gc", () => {
       expect(real.statusCode).toBe(200);
       expect(JSON.parse(real.body).deleted.map((d: { artifactId: string }) => d.artifactId)).toEqual(["art_api_old"]);
       expect(db.prepare("SELECT COUNT(*) AS n FROM artifacts").get()).toMatchObject({ n: 1 });
-      expect(store.exists(digest)).toBe(false);
+      expect(await store.exists(digest)).toBe(false);
 
       const unauth = await app.inject({ method: "POST", url: `/v1/projects/${PROJECT}/gc`, payload: {} });
       expect(unauth.statusCode).toBe(401);

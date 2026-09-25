@@ -14,8 +14,13 @@ export async function jobRoutes(app: FastifyInstance, deps: JobDeps): Promise<vo
 
   app.get("/v1/projects/:p/jobs", async (request) => {
     const projectId = (request.params as { p: string }).p;
-    const query = request.query as { limit?: string };
-    return { jobs: listJobs(db, projectId, Math.min(200, Number(query.limit) || 100)) };
+    const query = request.query as { limit?: string; kind?: string; status?: string };
+    return {
+      jobs: listJobs(db, projectId, Math.min(200, Number(query.limit) || 100), {
+        kind: query.kind,
+        status: query.status,
+      }),
+    };
   });
 
   app.get("/v1/projects/:p/jobs/:id", async (request) => {

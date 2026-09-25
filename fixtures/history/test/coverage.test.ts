@@ -94,10 +94,11 @@ describe("capture coverage manifest (offline)", () => {
         expect(slot.evidence).toBe("not_captured");
         expect(slot.reason).toBe("reference app not running");
       }
-      // Historical buildable commits carry the explicit synthetic-corpus gap.
+      // Offline run: buildable commits carry the explicit no-reconstruction gap
+      // (reconstruction requires a reachable history API).
       for (const slot of slots.filter((s) => s.commitIndex < 13 && s.evidence === "not_captured")) {
         expect(slot.reason).toBe(
-          "historical reconstruction not executed in dev profile: source corpus is synthetic"
+          "historical reconstruction not executed in offline mode: pass a reachable --api to reconstruct the corpus"
         );
       }
       // Documented honest viewport mapping (no invented 144-slot expansion).

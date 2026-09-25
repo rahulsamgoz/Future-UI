@@ -4,7 +4,15 @@
  */
 import { z } from "zod";
 
-export const jobStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
+/**
+ * Job lifecycle statuses. "completed_with_gaps" is a terminal state written by
+ * the index worker when a job processed everything it could but the outcome
+ * has honest coverage gaps (e.g. a history scan whose reconstruction could not
+ * create captures for selected commits). The jobs table status column is
+ * free-form TEXT; consumers must tolerate terminal statuses outside the
+ * queued/running flow.
+ */
+export const jobStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled", "completed_with_gaps"]);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
 export type JobStage =

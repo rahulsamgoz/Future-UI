@@ -35,7 +35,7 @@ export async function resolveRoutes(app: FastifyInstance, deps: ResolveDeps): Pr
       throw new UiIntelligenceError("NOT_FOUND", `project ${projectId} not found`, { httpStatus: 404 });
     }
     const target = (request.body as { target?: unknown })?.target ?? request.body;
-    return resolveTarget(db, projectId, indexCache, target as Parameters<typeof resolveTarget>[3], { store, screenshotCache });
+    return await resolveTarget(db, projectId, indexCache, target as Parameters<typeof resolveTarget>[3], { store, screenshotCache });
   });
 }
 

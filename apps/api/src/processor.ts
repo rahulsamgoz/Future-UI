@@ -9,6 +9,7 @@ import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 import { claimJob, completeJob, enqueueJob, insertOutbox } from "./jobs.js";
 import { getHistoryPlan, getProposal, updateHistoryPlanStatus } from "./store.js";
+import { dbReferenceLoader, type ReferenceLoader } from "./references.js";
 
 export type StoredProposalTarget = {
   entityId: string;
@@ -29,6 +30,8 @@ export type ProposalProcessingOptions = {
   provider?: ModelProvider;
   maxCandidates?: number;
   timeoutMs?: number;
+  /** Overrides the default DB-backed reference loader (tests). */
+  loadReference?: ReferenceLoader;
 };
 
 /** Run the proposal through the orchestrator and persist the outcome. */
@@ -46,6 +49,9 @@ export async function processProposal(db: Db, projectId: string, proposalId: str
   const orchestrator = new ProposalOrchestrator({
     provider: options.provider ?? new DeterministicProvider(),
     validator,
+    // Ground history/image references into real stored content before the
+    // provider sees them (captures/occurrences/artifacts live in this DB).
+    loadReference: options.loadReference ?? dbReferenceLoader(db, projectId),
     policy: { maxCandidates: options.maxCandidates ?? 4, timeoutMs: options.timeoutMs ?? 15_000 },
   });
 
@@ -105,9 +111,15 @@ export async function processJobInline(
       case "history_scan":
         processHistoryScan(db, projectId, payload.planId as string);
         break;
-      case "embedding":
-        // Embeddings are not configured in the dev profile: no-op success.
+      case "embedding": {
+        // Embeddings are not configured in the dev profile: no vectors are
+        // produced. Record the skip VISIBLY in the job payload so the record
+        // never reads as a bare success (lexical search stays the retrieval
+        // path, spec 14).
+        const noted = { ...payload, embedding: "skipped: no embedding model configured" };
+        db.prepare("UPDATE jobs SET payload_json = ? WHERE id = ?").run(JSON.stringify(noted), jobId);
         break;
+      }
       case "index_capture":
         // Full indexing runs in the index-worker; inline processing succeeds
         // without side effects so at-least-once delivery stays correct.
