@@ -1,10 +1,12 @@
 /**
  * GAP B acceptance test: React+Vite build adapter end-to-end.
  *
- * The fixture repo (fixtures/history/react-vite/repo) is a minimal real
- * React+Vite app with 3 buildable commits. Each commit changes visible header
- * text so captures are attributable to the commit sha. The repo carries a
- * ui-intel.history.json manifest declaring the build adapter configuration.
+ * The fixture repo is generated per run into a temp dir by
+ * fixtures/history/react-vite/generate.mjs: a minimal real React+Vite app
+ * with 3 buildable commits (lockfile included, so the manifest's `npm ci`
+ * works). Each commit changes visible header text so captures are
+ * attributable to the commit sha. The repo carries a ui-intel.history.json
+ * manifest declaring the build adapter configuration.
  *
  * This test runs the normal API plan → run → reconstruction path against the
  * fixture and asserts:
@@ -26,7 +28,14 @@ import { buildTestApp, post, type FastifyInstanceLike } from "./helpers.js";
 
 const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const PROJECT = "proj_reference_app";
-const FIXTURE_REPO = join(REPO_ROOT, "fixtures", "history", "react-vite", "repo");
+// Generated per run into a temp dir (the gitignored default location does not
+// exist on fresh CI checkouts — merge-commit CI run 36198097535 failed on
+// exactly that). tmpdir is inside the default UI_INTEL_RECONSTRUCT_ROOTS
+// allowlist.
+const FIXTURE_REPO = mkdtempSync(join(tmpdir(), "ui-intel-react-vite-fixture-"));
+execFileSync("node", [join(REPO_ROOT, "fixtures", "history", "react-vite", "generate.mjs"), FIXTURE_REPO], {
+  stdio: "pipe",
+});
 
 const browserDecision = browserGate(await probeChromium());
 if (browserDecision.action === "fail") throw new Error(browserDecision.message);
