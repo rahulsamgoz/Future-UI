@@ -37,6 +37,8 @@ export type ProposalRow = {
   status: string;
   candidates: unknown[] | null;
   failure: { code: string; message: string } | null;
+  /** Degradation note from the orchestrator (closure-2 GAP B). */
+  degraded: string | null;
   acceptedCandidate: { candidateId: string; acceptedAt: string; candidate: unknown } | null;
   createdAt: string;
   updatedAt: string;
@@ -188,6 +190,7 @@ export function getProposal(db: Db, projectId: string, proposalId: string): Prop
     status: row.status as string,
     candidates: row.candidates_json ? (JSON.parse(row.candidates_json as string) as unknown[]) : null,
     failure: row.failure_json ? (JSON.parse(row.failure_json as string) as { code: string; message: string }) : null,
+    degraded: row.degraded_json ? (JSON.parse(row.degraded_json as string) as string) : null,
     acceptedCandidate: row.accepted_candidate_json
       ? (JSON.parse(row.accepted_candidate_json as string) as ProposalRow["acceptedCandidate"])
       : null,

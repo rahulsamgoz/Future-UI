@@ -163,4 +163,108 @@ describe("index-worker grounding + embedding honesty", () => {
     expect(row.status).toBe("ready");
     expect(claimNextJob(db, "w_drain")).toBeNull();
   });
+
+  // === GAP A: worker reads artifact bytes through the configured storage driver ===
+  it("worker groundArtifactContent reads bytes through the configured store and emits no auth-gated URL", async () => {
+    const artifactId = "art_gap_a";
+    const digest = "deadbeef".repeat(8);
+    const bytes = Buffer.from("s3-image-bytes");
+    db.prepare(
+      "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES (?, ?, 'image', ?, 'image/png', 10, 'project', 'standard', ?)"
+    ).run(artifactId, PROJECT, digest, nowIso());
+    // Do NOT write the file to local fs — simulate a remote-only artifact.
+
+    // In-memory driver simulating an S3-only artifact (no local fs copy).
+    const memory = new Map<string, Uint8Array>();
+    const driver: import("@ui-intelligence/storage").StorageDriver = {
+      async put(key: string, data: Uint8Array) { memory.set(key, data); },
+      async get(key: string) { return memory.get(key) ?? null; },
+      async delete(key: string) { memory.delete(key); },
+      async exists(key: string) { return memory.has(key); },
+    };
+    const { ObjectStore } = await import("@ui-intelligence/storage");
+    const store = new ObjectStore("/unused", driver);
+    // Put directly into the driver with the sharded key (bypass digest verification).
+    await driver.put(`${digest.slice(0, 2)}/${digest}`, bytes);
+
+    const load = referenceLoader(db, PROJECT, store);
+    const grounded = await load({ kind: "image", artifactId } as DesignReference);
+    expect(grounded).not.toBeNull();
+    // Bytes are read through the configured driver even when local fs is empty.
+    expect(grounded!.imageBytes).toBeDefined();
+    expect(new TextDecoder().decode(grounded!.imageBytes)).toBe("s3-image-bytes");
+    // No auth-gated URL is emitted to the provider.
+    expect(grounded!.imageUrl).toBeUndefined();
+  });
+
+  // === GAP B: degraded notes from the orchestrator are persisted ===
+  it("persists the orchestrator degraded note in the proposals table", async () => {
+    const target = {
+      entityId: "ent_2",
+      entityKey: "catalog.productChooser",
+      entityVersionId: "entver_2",
+      currentReadSet: {
+        appBuildId: "build_dev",
+        contractDigest: "contract_digest_worker",
+        policyVersion: 1,
+        preferenceRevision: 0,
+        entityVersions: { ent_2: "entver_2" },
+      },
+      contract: {
+        entityKey: "catalog.productChooser",
+        allowedRepresentations: ["grid@1"],
+        dataBinding: "catalog.products@1",
+        actions: ["product.open@1"],
+      },
+      rendererSchemas: [
+        { id: "grid@1", propertySchema: { columns: { type: "number", min: 1, max: 4, default: 3 }, density: { type: "enum", values: ["comfortable", "compact"], default: "comfortable" } } },
+      ],
+    };
+    // Image reference with no vision-capable provider → orchestrator emits degraded note.
+    const request = {
+      requestId: "req_gap_b",
+      operation: "propose_change",
+      target: { kind: "selection", entityId: "ent_2", runtimeInstanceId: "rt_2" },
+      references: [{ kind: "image", artifactId: "art_gap_b_img" }],
+      instruction: "use this image",
+      appBuildId: "build_dev",
+      requestedCandidateCount: 1,
+    };
+    db.prepare(
+      "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES ('art_gap_b_img', ?, 'image', ?, 'image/png', 10, 'project', 'standard', ?)"
+    ).run(PROJECT, "0".repeat(64), nowIso());
+    db.prepare(
+      "INSERT OR REPLACE INTO proposals (id, project_id, request_json, target_json, status, created_at, updated_at) VALUES ('prop_gap_b', ?, ?, ?, 'queued', ?, ?)"
+    ).run(PROJECT, JSON.stringify(request), JSON.stringify(target), nowIso(), nowIso());
+
+    const job: ClaimedJob = {
+      jobId: "job_gap_b",
+      projectId: PROJECT,
+      kind: "proposal",
+      stage: "planning",
+      payload: { proposalId: "prop_gap_b", projectId: PROJECT },
+      leaseToken: "lease_gap_b",
+      attempt: 1,
+      workerId: "w_test",
+    };
+    // Text-only provider (no vision capability) — the orchestrator WILL emit a degraded note.
+    await handleProposal(db, job, {
+      id: "text-only",
+      capabilities: {},
+      async generate(input: ProviderInput) {
+        return {
+          candidates: [
+            { type: "grid@1", properties: { columns: 2, density: "compact" }, originKind: "generated", summary: "grid" },
+          ],
+        };
+      },
+    });
+
+    const row = db.prepare("SELECT * FROM proposals WHERE id = 'prop_gap_b'").get() as Record<string, unknown>;
+    expect(row.status).toBe("ready");
+    // The degraded note is persisted in the proposals table.
+    expect(row.degraded_json ?? row.degraded).toBeTruthy();
+    const degradedText = row.degraded_json ? JSON.parse(row.degraded_json as string) : row.degraded;
+    expect(String(degradedText)).toContain("image reference(s) ignored");
+  });
 });

@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/protocol" },
+    { "path": "packages/storage" },
     { "path": "packages/runtime-core" },
     { "path": "packages/preferences" },
     { "path": "packages/react" },

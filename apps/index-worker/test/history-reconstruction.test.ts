@@ -258,4 +258,57 @@ describe("history_scan with fixtureRepo performs reconstruction", () => {
     expect(row.status).toBe("succeeded");
     db.close();
   });
+
+  it("REPRO GAP A: respects the plan's selected scenarioIds and passes only those to reconstruct", async () => {
+    const db = freshDb();
+    // Plan selects ONLY catalog-default-desktop
+    insertPlan(
+      db,
+      "plan_one_scenario",
+      ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      JSON.stringify({ fixtureRepo: "/tmp/fixture-corpus", scenarioIds: ["catalog-default-desktop"] }),
+    );
+    const reconstruct = vi.fn(async (args: { commitSha: string; scenarios: string[] }) => ({
+      commitSha: args.commitSha,
+      buildArtifactDigest: "digest_one",
+      intentionallyUnbuildable: false,
+      scenarios: args.scenarios.map((scenarioId) => ({
+        scenarioId,
+        outcome: "captured" as const,
+        captureId: `capture_one_${scenarioId}`,
+        artifactId: `artifact_one_${scenarioId}`,
+        occurrenceCount: 3,
+      })),
+    }));
+    const worker = createWorker(db, {
+      workerId: "w-recon-one",
+      historyScan: {
+        fixtureRepo: "/tmp/fixture-corpus",
+        api: { baseUrl: "http://history-api.local", token: "test-token", projectId: PROJECT },
+        reconstruct: reconstruct as unknown as (args: {
+          repoDir: string;
+          commitSha: string;
+          scenarios: string[];
+          api: { baseUrl: string; token: string; projectId: string };
+        }) => Promise<unknown>,
+      },
+    });
+
+    const jobId = enqueueHistoryScan(db, "plan_one_scenario");
+    expect(await worker.runOnce()).toBe(true);
+
+    expect(reconstruct).toHaveBeenCalledTimes(1);
+    const callArgs = reconstruct.mock.calls[0]?.[0] as { scenarios: string[] };
+    // GAP A REPRO: the worker currently sends ALL 12 scenarios regardless of the plan selection.
+    // After the fix this should be exactly ["catalog-default-desktop"].
+    expect(callArgs.scenarios).toEqual(["catalog-default-desktop"]);
+
+    const row = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as Record<string, unknown>;
+    expect(row.status).toBe("succeeded");
+    const payload = JSON.parse(row.payload_json as string) as {
+      result?: { captured?: number; commits?: Array<Record<string, unknown>> };
+    };
+    expect(payload.result?.captured).toBe(1);
+    db.close();
+  });
 });

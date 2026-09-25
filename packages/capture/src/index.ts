@@ -18,6 +18,7 @@ export type { UploadApi, UploadResult } from "./uploader.js";
 export { standardScenarios } from "./scenarios.js";
 export {
   UNBUILDABLE_MARKER,
+  buildAndServe,
   declaresUnbuildable,
   digestServedPage,
   digestTree,
@@ -26,6 +27,7 @@ export {
   isLocalRepoPath,
   materializeCommit,
   publishCapture,
+  readHistoryManifest,
   reconstructCommit,
   resolveScenarios,
   serveStatic,
@@ -33,7 +35,9 @@ export {
   verifyPublication,
 } from "./reconstruct.js";
 export type {
+  BuildAdapterConfig,
   CommitReconstruction,
+  HistoryManifest,
   ManagedRunArgs,
   ManagedRunOutcome,
   ManagedRunProvenance,

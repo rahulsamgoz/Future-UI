@@ -12,9 +12,9 @@
  * buildArtifactDigest is the digest of the served tree, so a capture can never
  * be attributed to a commit that was not actually reconstructed.
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { digestOf } from "@ui-intelligence/protocol";
@@ -269,6 +269,108 @@ export function serveStatic(dir: string): Promise<{ baseUrl: string; close: () =
 }
 
 // ---------------------------------------------------------------------------
+// Build adapter (GAP B: React/Vite and other build-required frameworks)
+// ---------------------------------------------------------------------------
+
+export type BuildAdapterConfig = {
+  /** Directory inside the materialized worktree where the app lives (default "."). */
+  appDir?: string;
+  /** Install command (default "npm ci"). */
+  installCommand?: string;
+  /** Build command (default "npm run build"). */
+  buildCommand?: string;
+  /** Output directory relative to appDir (default "dist"). */
+  outDir?: string;
+  /** Build timeout in milliseconds (default 120_000). */
+  timeoutMs?: number;
+  /** Env vars to forward (default ["NODE_ENV", "CI"]). */
+  envAllowlist?: string[];
+};
+
+export type HistoryManifest = {
+  buildAdapter?: BuildAdapterConfig;
+};
+
+/** Read ui-intel.history.json from the materialized worktree if present. */
+export function readHistoryManifest(dir: string): HistoryManifest | undefined {
+  const manifestPath = path.join(dir, "ui-intel.history.json");
+  if (!existsSync(manifestPath)) return undefined;
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8")) as HistoryManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Promise wrapper around execFile with timeout and max-buffer protection. */
+function execFilePromise(
+  command: string,
+  args: string[],
+  opts: { cwd: string; timeoutMs: number; maxOutput: number; env?: NodeJS.ProcessEnv }
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { cwd: opts.cwd, env: opts.env, timeout: opts.timeoutMs, maxBuffer: opts.maxOutput },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`${command} ${args.join(" ")} failed: ${error.message}\nstdout: ${stdout}\nstderr: ${stderr}`));
+        } else {
+          resolve({ stdout, stderr });
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Build + serve a materialized commit that declares a build adapter in
+ * ui-intel.history.json. Runs install + build with resource limits, then serves
+ * the built output directory on an ephemeral port. Falls back to serveStatic
+ * when no manifest is present so existing static-fixture repos keep working.
+ */
+export async function buildAndServe(
+  materializedDir: string,
+  manifest: HistoryManifest
+): Promise<{ baseUrl: string; close: () => Promise<void>; buildOutDir: string }> {
+  const config: Required<BuildAdapterConfig> = {
+    appDir: manifest.buildAdapter?.appDir ?? ".",
+    installCommand: manifest.buildAdapter?.installCommand ?? "npm ci",
+    buildCommand: manifest.buildAdapter?.buildCommand ?? "npm run build",
+    outDir: manifest.buildAdapter?.outDir ?? "dist",
+    timeoutMs: manifest.buildAdapter?.timeoutMs ?? 120_000,
+    envAllowlist: manifest.buildAdapter?.envAllowlist ?? ["NODE_ENV", "CI", "npm_config_cache"],
+  };
+
+  const appDir = path.resolve(materializedDir, config.appDir);
+  const outDir = path.resolve(appDir, config.outDir);
+  const maxOutput = 2 * 1024 * 1024; // 2 MB stdout+stderr cap
+
+  const allowedEnv: NodeJS.ProcessEnv = {};
+  for (const key of config.envAllowlist) {
+    if (process.env[key] !== undefined) allowedEnv[key] = process.env[key];
+  }
+  allowedEnv["PATH"] = process.env.PATH ?? "";
+  allowedEnv["HOME"] = process.env.HOME ?? "";
+
+  const installArgs = config.installCommand.split(/\s+/).filter(Boolean);
+  const installCmd = installArgs.shift()!;
+  await execFilePromise(installCmd, installArgs, { cwd: appDir, timeoutMs: config.timeoutMs, maxOutput, env: allowedEnv });
+
+  const buildArgs = config.buildCommand.split(/\s+/).filter(Boolean);
+  const buildCmd = buildArgs.shift()!;
+  await execFilePromise(buildCmd, buildArgs, { cwd: appDir, timeoutMs: config.timeoutMs, maxOutput, env: allowedEnv });
+
+  const server = await serveStatic(outDir);
+  return {
+    baseUrl: server.baseUrl,
+    close: server.close,
+    buildOutDir: outDir,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Durable publication + verification
 // ---------------------------------------------------------------------------
 
@@ -453,27 +555,39 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
   const marker = args.unbuildableMarker ?? UNBUILDABLE_MARKER;
   const recipes = resolveScenarios(args.scenarios);
   const redactionPolicy: RedactionPolicy = args.redactionPolicy ?? { version: "1", masks: [] };
+  const materialized = materializeCommit(repoDir, args.commitSha);
+  const manifest = readHistoryManifest(materialized.dir);
+  const adapterVersion = manifest?.buildAdapter ? "build-adapter" : "static-fixture";
   const environment: CaptureEnvironment = args.environment ?? {
     runnerImageDigest: "reconstruct-local",
     browserRevision: "bundled-playwright",
     fontsDigest: "unknown",
-    adapterVersion: "static-fixture",
+    adapterVersion,
     captureToolVersion: "1.0.0",
     redactionPolicyDigest: await digestOf(redactionPolicy),
   };
 
-  const materialized = materializeCommit(repoDir, args.commitSha);
-  const server = await serveStatic(materialized.dir);
+  let server: { baseUrl: string; close: () => Promise<void> };
+  let buildOutDir: string | undefined;
+  if (manifest?.buildAdapter) {
+    log(`reconstruct ${args.commitSha}: build adapter detected in ui-intel.history.json`);
+    const built = await buildAndServe(materialized.dir, manifest);
+    server = built;
+    buildOutDir = built.buildOutDir;
+  } else {
+    server = await serveStatic(materialized.dir);
+  }
   try {
-    const buildArtifactDigest = await digestTree(materialized.dir);
+    const servedDir = buildOutDir ?? materialized.dir;
+    const buildArtifactDigest = await digestTree(servedDir);
     const intentionallyUnbuildable = declaresUnbuildable(materialized.dir, marker);
     log(
-      `reconstruct ${args.commitSha}: serving ${materialized.dir} at ${server.baseUrl} ` +
+      `reconstruct ${args.commitSha}: serving ${servedDir} at ${server.baseUrl} ` +
         `(digest ${buildArtifactDigest.slice(0, 12)}…, unbuildable=${intentionallyUnbuildable})`,
     );
 
     const runner =
-      args.deps?.runner ?? new ScenarioRunner({ baseUrl: server.baseUrl, adapterVersion: "static-fixture", redactionPolicy });
+      args.deps?.runner ?? new ScenarioRunner({ baseUrl: server.baseUrl, adapterVersion, redactionPolicy });
     const results: ScenarioReconstruction[] = [];
     let firstUnbuildableFailure: string | undefined;
 

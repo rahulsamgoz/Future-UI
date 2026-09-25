@@ -5,12 +5,13 @@
  * observation content (visible text, anchor, commit, evidence label) and the
  * capture's screenshot artifact id before the orchestrator calls the model.
  *
- * Audit finding 4: image content is grounded too. The loader returns the
- * artifact's BYTES (read from the object store) so vision providers can be
- * given base64 data URLs without a network fetch, AND a fetchable absolute
- * URL built from the raw artifact endpoint plus the configured external API
- * base (UI_INTEL_PUBLIC_API_BASE, default http://localhost:8787) for the
- * bytes-absent fallback.
+ * Closure-2 GAP A fix: the loader reads artifact BYTES through the configured
+ * storage driver (fs or S3 via the shared ObjectStore). We NO LONGER emit the
+ * auth-gated `/v1/artifacts/:id/raw` URL as `imageUrl` — external model
+ * providers fetch without credentials and receive 401, so the URL is unusable.
+ * The `imageUrl` field remains in the ProviderReference type for a future
+ * short-lived signed-URL fallback, but for now bytes-first is the only
+ * supported delivery mechanism.
  */
 import type { DesignReference } from "@ui-intelligence/protocol";
 import type { ProviderReference } from "@ui-intelligence/agent";
@@ -22,13 +23,13 @@ export type ReferenceLoader = (ref: DesignReference) => Promise<ProviderReferenc
 export type ReferenceLoaderOptions = {
   /** Object store for artifact bytes (bytes-first vision grounding). */
   store?: ObjectStore;
-  /** External base URL providers can fetch artifact URLs from. */
+  /** @deprecated no longer used; bytes-first delivery does not need a public base. */
   publicApiBase?: string;
 };
 
 type ArtifactRow = { id: string; digest: string; mime_type: string };
 
-/** Load one artifact's bytes + fetchable URL, or the fields that ARE available. */
+/** Load one artifact's bytes through the configured storage driver. */
 async function groundArtifact(
   db: Db,
   projectId: string,
@@ -40,25 +41,17 @@ async function groundArtifact(
     .get(projectId, artifactId) as ArtifactRow | undefined;
   if (!artifact) return {};
 
-  const base = (
-    options.publicApiBase ??
-    process.env.UI_INTEL_PUBLIC_API_BASE ??
-    "http://localhost:8787"
-  ).replace(/\/$/, "");
-  const imageUrl = `${base}/v1/artifacts/${encodeURIComponent(artifact.id)}/raw?projectId=${encodeURIComponent(projectId)}`;
-
   let imageBytes: Uint8Array | undefined;
   if (options.store) {
     try {
       const bytes = await options.store.get(artifact.digest);
       if (bytes && bytes.length > 0) imageBytes = new Uint8Array(bytes);
     } catch {
-      // bytes unavailable: the fetchable URL is the fallback path
+      // bytes unavailable from the configured driver
     }
   }
   return {
     ...(imageBytes ? { imageBytes } : {}),
-    imageUrl,
     imageMediaType: artifact.mime_type || "image/png",
   };
 }

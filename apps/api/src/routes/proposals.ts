@@ -175,6 +175,7 @@ export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): 
       status: proposal.status,
       candidates: proposal.candidates ?? [],
       failure: proposal.failure,
+      degraded: proposal.degraded,
       acceptedCandidateId: proposal.acceptedCandidate?.candidateId ?? null,
     };
   });

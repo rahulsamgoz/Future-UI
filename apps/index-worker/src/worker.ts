@@ -7,6 +7,8 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
+import { ObjectStore, createStorageDriver } from "@ui-intelligence/storage";
+import type { StorageDriver, S3LikeClient } from "@ui-intelligence/storage";
 import {
   ProposalOrchestrator,
   SpecValidator,
@@ -34,6 +36,18 @@ export type WorkerDb = InstanceType<typeof Database>;
 
 const LEASE_MS = 30_000;
 
+/** Build an ObjectStore from the same environment variables the API uses. */
+function workerStoreFromEnv(): ObjectStore {
+  const fsRoot = process.env.UI_INTEL_STORE ?? "./data/artifacts";
+  const selection = createStorageDriver({
+    driver: process.env.UI_INTEL_STORAGE_DRIVER,
+    s3Bucket: process.env.UI_INTEL_S3_BUCKET,
+    s3Prefix: process.env.UI_INTEL_S3_PREFIX,
+    fsRoot,
+  });
+  return new ObjectStore(fsRoot, selection.driver);
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
@@ -49,6 +63,16 @@ export function migrateWorker(db: WorkerDb): void {
     try {
       const sql = readFileSync(path, "utf8");
       db.exec(sql);
+      // Graceful migration: add degraded_json to proposals if the table was created
+      // before this column existed (closure-2 GAP B).
+      const hasDegraded = db.prepare("SELECT name FROM pragma_table_info('proposals') WHERE name = 'degraded_json'").get() as { name: string } | undefined;
+      if (!hasDegraded) {
+        try {
+          db.exec("ALTER TABLE proposals ADD COLUMN degraded_json TEXT");
+        } catch {
+          // best effort
+        }
+      }
       return;
     } catch {
       // try next candidate
@@ -188,6 +212,8 @@ export type WorkerDeps = {
   provider?: ModelProvider;
   handlers?: WorkerHandlers;
   historyScan?: HistoryScanDeps;
+  /** Injected object store for tests; otherwise resolved from env. */
+  store?: ObjectStore;
 };
 
 export type Worker = {
@@ -233,7 +259,7 @@ export function createWorker(db: WorkerDb, deps: WorkerDeps = {}): Worker {
           return;
         }
         case "proposal":
-          await handleProposal(db, job, deps.provider);
+          await handleProposal(db, job, deps.provider, deps.store);
           return;
         case "history_scan":
           await handleHistoryScan(db, job, deps.historyScan);
@@ -405,36 +431,44 @@ export async function handleIndexCapture(db: WorkerDb, job: ClaimedJob): Promise
  * project. Unresolvable references return null → orchestrator placeholder.
  */
 /**
- * Ground artifact image content (audit finding 4) from the shared store.
- * Bytes-first (digest-sharded fs layout, same as the API's fs driver), with
- * a fetchable absolute URL built from UI_INTEL_PUBLIC_API_BASE as fallback.
+ * Ground artifact image content through the configured storage driver.
+ * Bytes-first: reads from the shared ObjectStore (fs or S3) so vision
+ * providers receive base64 data URLs without a network fetch.
+ *
+ * Closure-2 GAP A fix: we NO LONGER emit the auth-gated `/v1/artifacts/:id/raw`
+ * URL as `imageUrl`. External model providers fetch without credentials and
+ * receive 401, so the URL is unusable. The field remains in the type for a
+ * future short-lived signed-URL fallback, but for now bytes-first is the
+ * only supported delivery mechanism.
  */
-function groundArtifactContent(
+async function groundArtifactContent(
   db: WorkerDb,
+  store: ObjectStore,
   projectId: string,
   artifactId: string
-): Pick<ProviderReference, "imageBytes" | "imageUrl" | "imageMediaType"> {
+): Promise<Pick<ProviderReference, "imageBytes" | "imageUrl" | "imageMediaType">> {
   const artifact = db
     .prepare("SELECT id, digest, mime_type FROM artifacts WHERE project_id = ? AND id = ?")
     .get(projectId, artifactId) as { id: string; digest: string; mime_type: string } | undefined;
   if (!artifact) return {};
   let imageBytes: Uint8Array | undefined;
   try {
-    const root = resolve(process.env.UI_INTEL_STORE ?? "./data/artifacts");
-    imageBytes = new Uint8Array(readFileSync(join(root, artifact.digest.slice(0, 2), artifact.digest)));
-    if (imageBytes.length === 0) imageBytes = undefined;
+    const bytes = await store.get(artifact.digest);
+    if (bytes && bytes.length > 0) imageBytes = new Uint8Array(bytes);
   } catch {
-    // bytes unavailable: the fetchable URL is the fallback path
+    // bytes unavailable from the configured driver
   }
-  const base = (process.env.UI_INTEL_PUBLIC_API_BASE ?? "http://localhost:8787").replace(/\/$/, "");
   return {
     ...(imageBytes ? { imageBytes } : {}),
-    imageUrl: `${base}/v1/artifacts/${encodeURIComponent(artifact.id)}/raw?projectId=${encodeURIComponent(projectId)}`,
     imageMediaType: artifact.mime_type || "image/png",
   };
 }
 
-export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignReference) => Promise<ProviderReference | null> {
+export function referenceLoader(
+  db: WorkerDb,
+  projectId: string,
+  store?: ObjectStore
+): (ref: DesignReference) => Promise<ProviderReference | null> {
   return async (ref: DesignReference): Promise<ProviderReference | null> => {
     if (ref.kind === "history") {
       const capture = db
@@ -464,9 +498,8 @@ export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignRe
         // malformed manifest: proceed without the artifact id
       }
       const head = `${capture.evidence_label} · ${capture.commit_sha.slice(0, 8)}`;
-      // Vision providers also get the screenshot artifact bytes/URL the same
-      // way as image references (audit finding 4).
-      const screenshot = artifactId ? groundArtifactContent(db, projectId, artifactId) : {};
+      // Vision providers get screenshot bytes through the configured store.
+      const screenshot = artifactId && store ? await groundArtifactContent(db, store, projectId, artifactId) : {};
       return {
         kind: "history",
         summary: occurrence
@@ -480,11 +513,12 @@ export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignRe
     if (ref.kind === "image") {
       const artifact = db.prepare("SELECT id FROM artifacts WHERE project_id = ? AND id = ?").get(projectId, ref.artifactId);
       if (!artifact) return null;
+      const grounded = store ? await groundArtifactContent(db, store, projectId, ref.artifactId) : {};
       return {
         kind: "image",
         summary: `design image artifact ${ref.artifactId}`,
         artifactId: ref.artifactId,
-        ...groundArtifactContent(db, projectId, ref.artifactId),
+        ...grounded,
       };
     }
     return null;
@@ -492,9 +526,15 @@ export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignRe
 }
 
 /** proposal: run the orchestrator with the deterministic provider by default. */
-export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: ModelProvider): Promise<void> {
+export async function handleProposal(
+  db: WorkerDb,
+  job: ClaimedJob,
+  provider?: ModelProvider,
+  store?: ObjectStore
+): Promise<void> {
   const proposalId = job.payload.proposalId as string;
   const projectId = job.payload.projectId as string;
+  const objectStore = store ?? workerStoreFromEnv();
 
   const proposalRow = db.prepare("SELECT * FROM proposals WHERE project_id = ? AND id = ?").get(projectId, proposalId) as
     | Record<string, unknown>
@@ -510,7 +550,7 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     const pageContract = targetJson.pageContract as PageContract;
     const pageValidator = new ProposalValidator(new RendererRegistry());
     const orchestrator = new ProposalOrchestrator({
-      ...workerOrchestratorBase(db, projectId, provider),
+      ...workerOrchestratorBase(db, projectId, provider, objectStore),
       validator: new SpecValidator({
         allowedRepresentations: [...pageContract.allowedLayouts],
         propertySchemas: {},
@@ -551,7 +591,7 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     allowedActions: target.contract.actions,
   });
   const orchestrator = new ProposalOrchestrator({
-    ...workerOrchestratorBase(db, projectId, provider),
+    ...workerOrchestratorBase(db, projectId, provider, objectStore),
     validator,
   });
 
@@ -563,13 +603,15 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
 function workerOrchestratorBase(
   db: WorkerDb,
   projectId: string,
-  provider?: ModelProvider
+  provider?: ModelProvider,
+  store?: ObjectStore
 ): Pick<ConstructorParameters<typeof ProposalOrchestrator>[0], "provider" | "loadReference" | "policy"> {
   return {
     provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
     // Ground history/image references into real stored content before the
-    // provider sees them (this worker reads the same SQLite store as the API).
-    loadReference: referenceLoader(db, projectId),
+    // provider sees them (this worker reads through the configured storage
+    // driver — fs or S3 — via the shared ObjectStore, closure-2 GAP A).
+    loadReference: referenceLoader(db, projectId, store),
     policy: { maxCandidates: 4, timeoutMs: 15_000 },
   };
 }
@@ -580,10 +622,13 @@ function persistProposalOutcome(
   proposalId: string,
   settled: Awaited<ReturnType<ProposalOrchestrator["propose"]>>
 ): void {
-  db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
+  db.prepare(
+    "UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, degraded_json = ?, updated_at = ? WHERE id = ?"
+  ).run(
     settled.status,
     settled.candidates.length > 0 ? JSON.stringify(settled.candidates) : null,
     settled.failure ? JSON.stringify(settled.failure) : null,
+    settled.degraded ? JSON.stringify(settled.degraded) : null,
     nowIso(),
     proposalId
   );
@@ -748,7 +793,7 @@ export async function handleHistoryScan(db: WorkerDb, job: ClaimedJob, deps?: Hi
   const shas = selectedCommits.map((c) => c.commitSha);
   const planInput = (() => {
     try {
-      return JSON.parse(planRow.input_json ?? "{}") as { fixtureRepo?: string };
+      return JSON.parse(planRow.input_json ?? "{}") as { fixtureRepo?: string; scenarioIds?: string[] };
     } catch {
       return {};
     }
@@ -767,7 +812,15 @@ export async function handleHistoryScan(db: WorkerDb, job: ClaimedJob, deps?: Hi
     );
   }
 
-  const scenarioIds = standardScenarios().map((r) => r.id);
+  const allScenarioIds = standardScenarios().map((r) => r.id);
+  const payloadScenarioIds = job.payload.scenarioIds as string[] | undefined;
+  const planScenarioIds = planInput.scenarioIds;
+  const scenarioIds =
+    payloadScenarioIds && payloadScenarioIds.length > 0
+      ? payloadScenarioIds
+      : planScenarioIds && planScenarioIds.length > 0
+        ? planScenarioIds
+        : allScenarioIds;
   const commitOutcomes: HistoryCommitOutcome[] = [];
   let unexpectedFailure: string | undefined;
 

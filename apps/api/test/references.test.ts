@@ -57,7 +57,7 @@ describe("proposal processor reference grounding", () => {
     expect(await load({ kind: "history", captureId: "cap_nope" })).toBeNull();
   });
 
-  it("returns bytes + a fetchable URL for an uploaded PNG (audit finding 4)", async () => {
+  it("returns bytes through the configured store and emits no auth-gated URL (closure-2 GAP A)", async () => {
     const { app, cleanup: done } = await appRef;
     cleanup = done;
     const db = app.db;
@@ -70,25 +70,24 @@ describe("proposal processor reference grounding", () => {
       "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES ('art_img_1', ?, 'image', ?, 'image/png', ?, 'project', 'standard', ?)"
     ).run(PROJECT, digest, png.byteLength, new Date().toISOString());
 
-    const load = dbReferenceLoader(db, PROJECT, { store, publicApiBase: "https://api.example.dev" });
+    const load = dbReferenceLoader(db, PROJECT, { store });
 
-    // Image reference: BYTES first, plus an absolute URL built from the
-    // configured external base and the raw artifact endpoint.
+    // Image reference: BYTES first; no auth-gated URL emitted.
     const grounded = await load({ kind: "image", artifactId: "art_img_1" });
     expect(grounded).not.toBeNull();
     expect(grounded!.artifactId).toBe("art_img_1");
     expect(Array.from(grounded!.imageBytes!)).toEqual(Array.from(png));
     expect(grounded!.imageMediaType).toBe("image/png");
-    expect(grounded!.imageUrl).toBe(`https://api.example.dev/v1/artifacts/art_img_1/raw?projectId=${PROJECT}`);
+    expect(grounded!.imageUrl).toBeUndefined();
 
-    // Without an injected store, the URL is still produced (bytes fall back).
-    const urlOnly = dbReferenceLoader(db, PROJECT, { publicApiBase: "https://api.example.dev" });
-    const groundedNoStore = await urlOnly({ kind: "image", artifactId: "art_img_1" });
+    // Without an injected store, bytes are absent and no URL is emitted.
+    const noStore = dbReferenceLoader(db, PROJECT);
+    const groundedNoStore = await noStore({ kind: "image", artifactId: "art_img_1" });
     expect(groundedNoStore!.imageBytes).toBeUndefined();
-    expect(groundedNoStore!.imageUrl).toBe(`https://api.example.dev/v1/artifacts/art_img_1/raw?projectId=${PROJECT}`);
+    expect(groundedNoStore!.imageUrl).toBeUndefined();
   });
 
-  it("attaches the screenshot artifact bytes/URL to grounded history references", async () => {
+  it("attaches the screenshot artifact bytes through the store and emits no auth-gated URL (closure-2 GAP A)", async () => {
     const { app } = await appRef;
     const db = app.db;
     const now = new Date().toISOString();
@@ -111,11 +110,13 @@ describe("proposal processor reference grounding", () => {
       now
     );
 
-    const load = dbReferenceLoader(db, PROJECT, { store: new ObjectStore(join(dir, "artifacts")), publicApiBase: "http://localhost:8787" });
+    const load = dbReferenceLoader(db, PROJECT, { store: new ObjectStore(join(dir, "artifacts")) });
     const grounded = await load({ kind: "history", captureId: "cap_ref9" });
     expect(grounded!.artifactId).toBe("art_shot_9");
     expect(Array.from(grounded!.imageBytes!)).toEqual(Array.from(png));
-    expect(grounded!.imageUrl).toBe(`http://localhost:8787/v1/artifacts/art_shot_9/raw?projectId=${PROJECT}`);
+    // Auth-gated URL is no longer emitted — external providers fetch without
+    // credentials and receive 401, so the URL is unusable.
+    expect(grounded!.imageUrl).toBeUndefined();
   });
 
 

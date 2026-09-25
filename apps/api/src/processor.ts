@@ -128,10 +128,13 @@ async function persistProposalOutcome(
   proposalId: string,
   settled: Awaited<ReturnType<ProposalOrchestrator["propose"]>>
 ): Promise<void> {
-  db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
+  db.prepare(
+    "UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, degraded_json = ?, updated_at = ? WHERE id = ?"
+  ).run(
     settled.status,
     settled.candidates.length > 0 ? JSON.stringify(settled.candidates) : null,
     settled.failure ? JSON.stringify(settled.failure) : null,
+    settled.degraded ? JSON.stringify(settled.degraded) : null,
     nowIso(),
     proposalId
   );

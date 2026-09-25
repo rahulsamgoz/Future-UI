@@ -5,6 +5,7 @@
  * uncertainty range (no pilot data).
  */
 import { newId, UiIntelligenceError, type HistoryPlanInput, type HistoryPlanRecord } from "@ui-intelligence/protocol";
+import { standardScenarios } from "@ui-intelligence/capture";
 import { statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -109,12 +110,33 @@ export function planHistory(db: Db, projectId: string, input: HistoryPlanInput):
     commitSha: tipCandidates[i]?.sha ?? "",
   }));
 
+  // Resolve scenarioIds: empty/absent means "all" standard scenarios; otherwise
+  // validate every id against the known set and reject unknowns with 422.
+  const allScenarioIds = standardScenarios().map((r) => r.id);
+  const resolvedScenarioIds =
+    !input.scenarioIds || input.scenarioIds.length === 0
+      ? allScenarioIds
+      : input.scenarioIds;
+  const unknownIds = resolvedScenarioIds.filter((id) => !allScenarioIds.includes(id));
+  if (unknownIds.length > 0) {
+    throw new UiIntelligenceError(
+      "SCHEMA_INVALID",
+      `unknown scenarioIds: ${unknownIds.join(", ")}. Known: ${allScenarioIds.join(", ")}`,
+      { httpStatus: 422 },
+    );
+  }
+  // Deduplicate while preserving order.
+  const uniqueScenarioIds = [...new Set(resolvedScenarioIds)];
+
   const builds = selectedCommits.length;
-  const scenarios = Math.max(1, input.scenarioIds.length);
-  const estimatedCaptures = builds * scenarios * VIEWPORTS_PER_SCENARIO;
+  const estimatedCaptures = builds * uniqueScenarioIds.length * VIEWPORTS_PER_SCENARIO;
+  const normalizedInput: HistoryPlanInput = {
+    ...input,
+    scenarioIds: uniqueScenarioIds,
+  };
   const record: HistoryPlanRecord = {
     planId: newId("plan"),
-    input,
+    input: normalizedInput,
     resolvedTips,
     selectedCommits,
     estimatedCaptures,

@@ -65,6 +65,7 @@ export function Editor() {
   const [previewCandidate, setPreviewCandidate] = useState<LocalCandidate | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const [degradedNote, setDegradedNote] = useState<string | null>(null);
   const [lastApplicationId, setLastApplicationId] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ captureId: string; evidenceLabel: string; commitSha: string; capturedAt: string; summary: string } | string> | null>(null);
   const [instruction, setInstruction] = useState("");
@@ -138,12 +139,14 @@ export function Editor() {
     setGenerating(true);
     setStatus(null);
     setStale(false);
+    setDegradedNote(null);
     try {
       const scopeKey = instance.contract.entityKey + (instanceKeyOf(instance) ? `#${instanceKeyOf(instance)}` : "");
       const generationRevision = preferences.active.get(scopeKey)?.revision ?? 0;
       try {
-        const apiCandidates = await proposeViaApi(instance);
+        const { candidates: apiCandidates, degraded } = await proposeViaApi(instance);
         setCandidates(apiCandidates.map((c) => adaptApiCandidate(c, instance, generationRevision)));
+        setDegradedNote(degraded);
         if (apiCandidates.length === 0) setStatus("No valid candidates for this target's contract.");
         return;
       } catch (error) {
@@ -166,7 +169,7 @@ export function Editor() {
   async function postProposalAndPoll(targetRequest: {
     target: { kind: "selection"; entityId: string; runtimeInstanceId: string } | { kind: "page"; pageKey: string; pageContract: PageContract };
     requestedCandidateCount: number;
-  }): Promise<ApiCandidateDto[]> {
+  }): Promise<{ candidates: ApiCandidateDto[]; degraded: string | null }> {
     const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
     const base = apiBaseUrl ?? "";
     const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
@@ -196,14 +199,15 @@ export function Editor() {
         status: string;
         candidates?: ApiCandidateDto[];
         failure?: { message?: string };
+        degraded?: string | null;
       };
-      if (body.status === "ready") return body.candidates ?? [];
+      if (body.status === "ready") return { candidates: body.candidates ?? [], degraded: body.degraded ?? null };
       if (body.status === "failed") throw new Error(body.failure?.message ?? "proposal failed");
     }
     throw new Error("proposal polling timed out");
   }
 
-  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<{ candidates: ApiCandidateDto[]; degraded: string | null }> {
     return postProposalAndPoll({
       target: {
         kind: "selection" as const,
@@ -391,10 +395,11 @@ export function Editor() {
     const currentLayout: LayoutNode = previewLayout?.layout ?? defaultLayoutFor(pageKey);
     setGeneratingLayouts(true);
     setStatus(null);
+    setDegradedNote(null);
     try {
       const generationRevision = preferences.active.get(`page:${pageKey}`)?.revision ?? 0;
       try {
-        const apiCandidates = await proposePageViaApi(pageKey, pageContract);
+        const { candidates: apiCandidates, degraded } = await proposePageViaApi(pageKey, pageContract);
         setLayoutCandidates(
           apiCandidates.map((c) => ({
             layout: c.presentation as unknown as LayoutNode,
@@ -403,6 +408,7 @@ export function Editor() {
             offline: false,
           }))
         );
+        setDegradedNote(degraded);
         setPageScopeNote(
           apiCandidates.length > 0
             ? "API page-scope generation — layout candidates validated against the page contract."
@@ -434,7 +440,7 @@ export function Editor() {
     }
   }
 
-  async function proposePageViaApi(key: string, pageContract: PageContract): Promise<ApiCandidateDto[]> {
+  async function proposePageViaApi(key: string, pageContract: PageContract): Promise<{ candidates: ApiCandidateDto[]; degraded: string | null }> {
     return postProposalAndPoll({
       target: { kind: "page" as const, pageKey: key, pageContract },
       requestedCandidateCount: 3,
@@ -664,6 +670,11 @@ export function Editor() {
                       Target changed since these alternatives were generated — regenerate.
                     </div>
                   )}
+                  {degradedNote && (
+                    <div className="degraded-note muted small" data-testid="degraded-note" role="alert">
+                      {degradedNote}
+                    </div>
+                  )}
                   <ul className="candidate-list">
                     {candidates.map((c) => (
                       <li key={c.candidateId} className="candidate" data-testid="candidate">
@@ -721,6 +732,11 @@ export function Editor() {
               <button className="btn primary" onClick={() => void generateLayouts()} disabled={generatingLayouts} data-testid="generate-layouts">
                 {generatingLayouts ? "Generating…" : "Show layouts"}
               </button>
+              {degradedNote && (
+                <div className="degraded-note muted small" data-testid="degraded-note" role="alert">
+                  {degradedNote}
+                </div>
+              )}
               <ul className="candidate-list">
                 {layoutCandidates.map((l, i) => (
                   <li key={i} className="candidate" data-testid="page-candidate">
