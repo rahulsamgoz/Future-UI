@@ -82,6 +82,10 @@ export function App() {
       // Close the cross-tab broadcast channel on unmount.
       preferences?.dispose();
     };
+    // `cart` (services?.cart ?? localCart) is identity-stable: boot assigns the
+    // same localCart instance into services, and parent providers supply one
+    // fixed instance. Do NOT construct a new cart per render — the effect
+    // depends on it and would re-boot in a loop.
   }, [cart, parentServices]);
 
   if (!services) {

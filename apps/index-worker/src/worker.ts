@@ -510,30 +510,22 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     const pageContract = targetJson.pageContract as PageContract;
     const pageValidator = new ProposalValidator(new RendererRegistry());
     const orchestrator = new ProposalOrchestrator({
-      provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
+      ...workerOrchestratorBase(db, projectId, provider),
       validator: new SpecValidator({
         allowedRepresentations: [...pageContract.allowedLayouts],
         propertySchemas: {},
         dataBinding: `page:${pageContract.pageKey}`,
         allowedActions: [],
       }),
-      loadReference: referenceLoader(db, projectId),
       validatePageLayout: (root, contract, entityContracts, readSet, policyVersion) =>
         pageValidator.validatePageLayout(root, contract, entityContracts, readSet, policyVersion),
-      policy: { maxCandidates: 4, timeoutMs: 15_000 },
     });
     const pageResult = await orchestrator.proposePage(request, {
       pageKey: targetJson.pageKey as string,
       pageContract,
       currentReadSet: targetJson.currentReadSet as Parameters<ProposalOrchestrator["proposePage"]>[1]["currentReadSet"],
     });
-    db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
-      pageResult.status,
-      pageResult.candidates.length > 0 ? JSON.stringify(pageResult.candidates) : null,
-      pageResult.failure ? JSON.stringify(pageResult.failure) : null,
-      nowIso(),
-      proposalId
-    );
+    persistProposalOutcome(db, proposalId, pageResult);
     return;
   }
 
@@ -559,19 +551,39 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     allowedActions: target.contract.actions,
   });
   const orchestrator = new ProposalOrchestrator({
-    provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
+    ...workerOrchestratorBase(db, projectId, provider),
     validator,
+  });
+
+  const result = await orchestrator.propose(request, target);
+  persistProposalOutcome(db, proposalId, result);
+}
+
+/** Shared orchestrator deps: provider, grounded reference loader, and policy. */
+function workerOrchestratorBase(
+  db: WorkerDb,
+  projectId: string,
+  provider?: ModelProvider
+): Pick<ConstructorParameters<typeof ProposalOrchestrator>[0], "provider" | "loadReference" | "policy"> {
+  return {
+    provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
     // Ground history/image references into real stored content before the
     // provider sees them (this worker reads the same SQLite store as the API).
     loadReference: referenceLoader(db, projectId),
     policy: { maxCandidates: 4, timeoutMs: 15_000 },
-  });
+  };
+}
 
-  const result = await orchestrator.propose(request, target);
+/** Persist the orchestrator outcome (shared by both scopes). */
+function persistProposalOutcome(
+  db: WorkerDb,
+  proposalId: string,
+  settled: Awaited<ReturnType<ProposalOrchestrator["propose"]>>
+): void {
   db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
-    result.status,
-    result.candidates.length > 0 ? JSON.stringify(result.candidates) : null,
-    result.failure ? JSON.stringify(result.failure) : null,
+    settled.status,
+    settled.candidates.length > 0 ? JSON.stringify(settled.candidates) : null,
+    settled.failure ? JSON.stringify(settled.failure) : null,
     nowIso(),
     proposalId
   );

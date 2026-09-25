@@ -16,7 +16,7 @@
  * from the manager package (no cross-app imports).
  */
 import type { ManagedRunArgs, ManagedRunOutcome } from "@ui-intelligence/capture";
-import { executeManagedRun } from "@ui-intelligence/capture";
+import { executeManagedRun, historyApiFromEnv } from "@ui-intelligence/capture";
 import type { CaptureUploader, ScenarioRunner, UploadApi } from "@ui-intelligence/capture";
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -64,13 +64,17 @@ export async function executeRunScenarios(
   // repoUrl reconstructs the actual commit; remote/absent captures APP_URL
   // with a served-page digest and the honest "asserted, not verified"
   // provenance. Without a history API nothing is reported as captured.
+  // Closure review: child workers spawned via managedWorkerFromEnv receive no
+  // injected historyApi, so the HISTORY_API_* env fallback MUST live here —
+  // otherwise the capture.yml managed run publishes nothing and reports every
+  // scenario failed.
   return executeManagedRun({
     projectId: input.projectId,
     repoUrl: input.repoUrl || undefined,
     commitSha: input.commitSha,
     scenarios,
     appUrl: input.appUrl,
-    api: input.historyApi,
+    api: input.historyApi ?? historyApiFromEnv(),
     deps,
   });
 }

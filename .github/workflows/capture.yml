@@ -113,7 +113,7 @@ jobs:
             --api http://localhost:8787 \
             --token dev-token \
             --project proj_reference_app \
-            --out coverage-report.json || true
+            --out coverage-report.json
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4

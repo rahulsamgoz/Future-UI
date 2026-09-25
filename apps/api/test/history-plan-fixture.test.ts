@@ -17,10 +17,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { browserGate, probeChromium } from "@ui-intelligence/capture";
 import { buildTestApp, post, type FastifyInstanceLike } from "./helpers.js";
 
 const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const PROJECT = "proj_reference_app";
+
+// Browser gate (closure review): the end-to-end reconstruction test launches
+// real Chromium via the worker path. Fail loudly when it is missing (never a
+// silent skip); UI_INTEL_ALLOW_NO_BROWSER=1 opts out explicitly.
+const browserDecision = browserGate(await probeChromium());
+if (browserDecision.action === "fail") throw new Error(browserDecision.message);
+const browserIt = it.skipIf(browserDecision.action === "skip");
 
 describe("history plan fixtureRepo end to end (audit finding 3a)", () => {
   let dir: string;
@@ -85,7 +93,7 @@ describe("history plan fixtureRepo end to end (audit finding 3a)", () => {
     expect(without.statusCode).toBe(201);
   });
 
-  it("reconstructs the selected commit through the real worker path (captures carry that commit sha)", { timeout: 300_000 }, async () => {
+  browserIt("reconstructs the selected commit through the real worker path (captures carry that commit sha)", { timeout: 300_000 }, async () => {
     // Register the fixture commits so the plan can select them.
     const log = execFileSync("git", ["-C", corpusDir, "log", "--reverse", "--format=%H %cI"], {
       encoding: "utf8",

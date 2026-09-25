@@ -60,6 +60,23 @@ export type ProviderReference = {
   imageMediaType?: string;
 };
 
+/**
+ * True when a reference carries image content a vision provider can attach —
+ * the exact conditions the OpenAI-compatible provider's vision path uses
+ * (bytes first, then fetchable imageUrl, then the legacy `url` for image
+ * refs). Shared by the orchestrator's degraded-note accounting so a dropped
+ * image is never under-counted (closure review).
+ */
+export function referenceHasImageContent(reference: ProviderReference): boolean {
+  if ((reference.imageBytes?.length ?? 0) > 0) return true;
+  if (typeof reference.imageUrl === "string" && reference.imageUrl.length > 0) return true;
+  return (
+    reference.kind === "image" &&
+    typeof reference.url === "string" &&
+    reference.url.length > 0
+  );
+}
+
 export type ProviderInput = {
   instruction: string;
   targetContract: ProviderTargetContract;

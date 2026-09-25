@@ -186,18 +186,52 @@ describe("managed executor durable publication", () => {
   });
 
   it("never reports captured without a configured history API", async () => {
-    const runner = fakeRunner();
-    const fetch = fakeVerifyFetch();
-    const uploader = { upload: vi.fn(async () => ({ captureId: "never_used" })) };
+    // Hermetic: the env fallback must not rescue this test from a developer
+    // shell that happens to export HISTORY_API_URL.
+    vi.stubEnv("HISTORY_API_URL", "");
+    try {
+      const runner = fakeRunner();
+      const fetch = fakeVerifyFetch();
+      const uploader = { upload: vi.fn(async () => ({ captureId: "never_used" })) };
 
-    const { results } = await executeRunScenarios(
-      ["catalog-default-desktop"],
-      { ...INPUT, historyApi: undefined },
-      { runner, uploader, fetch },
-    );
+      const { results } = await executeRunScenarios(
+        ["catalog-default-desktop"],
+        { ...INPUT, historyApi: undefined },
+        { runner, uploader, fetch },
+      );
 
-    expect(results[0]?.status).toBe("failed");
-    expect(results[0]?.error).toContain("history API not configured");
-    expect(uploader.upload).not.toHaveBeenCalled();
+      expect(results[0]?.status).toBe("failed");
+      expect(results[0]?.error).toContain("history API not configured");
+      expect(uploader.upload).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("falls back to HISTORY_API_* env when no historyApi is injected (closure review: child worker mode)", async () => {
+    // Child capture-runner processes spawned by the runner-manager pool get no
+    // injected historyApi — the env fallback is their ONLY publication path.
+    vi.stubEnv("HISTORY_API_URL", "http://env-history.local");
+    vi.stubEnv("HISTORY_API_TOKEN", "env-token");
+    vi.stubEnv("HISTORY_API_PROJECT", "proj_env");
+    try {
+      const runner = fakeRunner();
+      const fetch = fakeVerifyFetch();
+      const uploader = { upload: vi.fn(async (manifest: CaptureManifest) => ({ captureId: manifest.captureId })) };
+
+      const { results } = await executeRunScenarios(
+        ["catalog-default-desktop"],
+        { ...INPUT, historyApi: undefined },
+        { runner, uploader, fetch },
+      );
+
+      expect(results[0]?.status).toBe("captured");
+      // Publication verification went to the ENV-derived API base URL.
+      const envCalls = fetch.mock.calls.map((c) => String(c[0])).filter((href) => href.startsWith("http://env-history.local"));
+      expect(envCalls.some((href) => href.includes("/captures/"))).toBe(true);
+      expect(envCalls.some((href) => href.includes("projectId=proj_env") || href.includes("/projects/proj_env/"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

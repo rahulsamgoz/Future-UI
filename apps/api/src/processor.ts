@@ -68,17 +68,24 @@ export async function processProposal(db: Db, projectId: string, proposalId: str
     allowedActions: target.contract.actions,
   });
   const orchestrator = new ProposalOrchestrator({
-    provider: options.provider ?? new DeterministicProvider(),
+    ...orchestratorBase(options, db, projectId),
     validator,
+  });
+
+  const settled = await orchestrator.propose(request, target);
+  await persistProposalOutcome(db, proposalId, settled);
+}
+
+/** Shared orchestrator deps: provider, grounded reference loader, and policy. */
+function orchestratorBase(options: ProposalProcessingOptions, db: Db, projectId: string) {
+  return {
+    provider: options.provider ?? new DeterministicProvider(),
     // Ground history/image references into real stored content before the
     // provider sees them (captures/occurrences/artifacts live in this DB).
     // The object store grounds artifact BYTES for vision providers.
     loadReference: options.loadReference ?? dbReferenceLoader(db, projectId, { store: options.store, publicApiBase: options.publicApiBase }),
     policy: { maxCandidates: options.maxCandidates ?? 4, timeoutMs: options.timeoutMs ?? 15_000 },
-  });
-
-  const settled = await orchestrator.propose(request, target);
-  await persistProposalOutcome(db, proposalId, settled);
+  };
 }
 
 /** Page-scope proposal processing (audit finding 4). */
@@ -94,7 +101,7 @@ async function processPageProposal(
   const pageContract = stored.pageContract;
   const pageValidator = new ProposalValidator(new RendererRegistry());
   const orchestrator = new ProposalOrchestrator({
-    provider: options.provider ?? new DeterministicProvider(),
+    ...orchestratorBase(options, db, projectId),
     // The entity validator is unused on the page path (proposePage validates
     // through validatePageLayout); a permissive instance satisfies the dep.
     validator: new SpecValidator({
@@ -103,10 +110,8 @@ async function processPageProposal(
       dataBinding: `page:${pageContract.pageKey}`,
       allowedActions: [],
     }),
-    loadReference: options.loadReference ?? dbReferenceLoader(db, projectId, { store: options.store, publicApiBase: options.publicApiBase }),
     validatePageLayout: (root, contract, entityContracts, readSet, policyVersion) =>
       pageValidator.validatePageLayout(root, contract, entityContracts, readSet, policyVersion),
-    policy: { maxCandidates: options.maxCandidates ?? 4, timeoutMs: options.timeoutMs ?? 15_000 },
   });
 
   const settled = await orchestrator.proposePage(request, {

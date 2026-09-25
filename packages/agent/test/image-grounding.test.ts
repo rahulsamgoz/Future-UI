@@ -204,6 +204,46 @@ describe("orchestrator image-reference honesty (audit finding 4)", () => {
     expect(imageReferenceNote([{ kind: "image", summary: "s", imageBytes: PNG_BYTES }], true)).toBeUndefined();
   });
 
+  it("counts image-bearing history references (closure review: the provider attaches them, so the note must too)", () => {
+    // A history reference carrying a screenshot IS an image input for the
+    // vision path — a non-vision provider drops it, and that must be counted.
+    expect(
+      imageReferenceNote([{ kind: "history", summary: "s", imageBytes: PNG_BYTES }], false)?.degraded,
+    ).toContain("1 image reference(s) ignored: provider not vision-capable");
+    // A history reference WITHOUT grounded image content loses nothing visual
+    // (its observation text still reaches the model) — no image note.
+    expect(imageReferenceNote([{ kind: "history", summary: "s" }], false)).toBeUndefined();
+    // Vision-capable provider with a content-carrying history ref: no note.
+    expect(
+      imageReferenceNote([{ kind: "history", summary: "s", imageBytes: PNG_BYTES }], true),
+    ).toBeUndefined();
+  });
+
+  it("surfaces the history screenshot in the degraded note through the orchestrator", async () => {
+    const textProvider = {
+      id: "text-only",
+      generate: async () => ({ candidates: [{ type: "grid@1", properties: { columns: 2 }, originKind: "generated" as const, summary: "s" }] }),
+    };
+    const orchestrator = new ProposalOrchestrator({
+      provider: textProvider,
+      validator: passingValidator,
+      loadReference: async (ref) =>
+        ref.kind === "history"
+          ? { kind: "history", summary: "capture cap_1", artifactId: "art_shot", imageBytes: PNG_BYTES, imageMediaType: "image/png" }
+          : { kind: "image", summary: "image artifact art_1", artifactId: "art_1" },
+    });
+    const withHistory = {
+      ...request,
+      references: [
+        { kind: "image" as const, artifactId: "art_1" },
+        { kind: "history" as const, captureId: "cap_1" },
+      ],
+    };
+    const result = await orchestrator.propose(withHistory, target);
+    expect(result.status).toBe("ready");
+    expect(result.degraded).toContain("2 image reference(s) ignored: provider not vision-capable");
+  });
+
   it("attaches grounded screenshot bytes for history references when vision is on", async () => {
     const bodies: unknown[] = [];
     vi.stubGlobal(

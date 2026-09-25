@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { MemoryPreferenceStore, SyncManager } from "@ui-intelligence/preferences";
 import type { PreferenceRecord, SpecificationRecord, SyncBundle, SyncMergeResult } from "@ui-intelligence/protocol";
 import { buildTestApp } from "./helpers.js";
+import { mergeSyncBundle } from "../src/sync.js";
 import type { Db } from "../src/db.js";
 
 const OPERATOR = "dev-token";
@@ -124,6 +125,39 @@ describe("finding 1: rejected sync requests leave no profile ownership row", () 
       const res = await syncVia(app, member, "profile_unknown_project", "proj_nope", true);
       expect(res.statusCode).toBe(404);
       expect(ownedRow(app.db, "profile_unknown_project")).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("the in-transaction owner check rolls back a merge that lost the registration race (TOCTOU)", async () => {
+    const { app, cleanup } = await makeApp();
+    try {
+      // Owner A's merge commits first.
+      const memberA = await provisionUser(app, [{ projectId: CANONICAL_PROJECT, role: "member" }]);
+      const first = await syncVia(app, memberA, "profile_race", CANONICAL_PROJECT, true);
+      expect(first.statusCode).toBe(200);
+
+      // A concurrent request from B passed the route-level pre-check BEFORE
+      // A committed, then enters the merge with registerProfileOwner = B. Its
+      // INSERT OR IGNORE loses the race silently — the in-transaction
+      // re-read must then reject the whole merge so B writes NOTHING.
+      expect(() =>
+        mergeSyncBundle(
+          app.db,
+          "profile_race",
+          bundle("profile_race", CANONICAL_PROJECT, true) as SyncBundle,
+          { registerProfileOwner: "user_b_racer" },
+        ),
+      ).toThrowError(/belongs to another principal/);
+
+      // Ownership is unchanged and B's preference write never landed: exactly
+      // one synced record (A's) exists for the profile.
+      expect(ownedRow(app.db, "profile_race")?.owner_user_id).not.toBe("user_b_racer");
+      const rows = app.db
+        .prepare("SELECT profile_id FROM synced_preferences WHERE profile_id = ?")
+        .all("profile_race");
+      expect(rows).toHaveLength(1);
     } finally {
       cleanup();
     }

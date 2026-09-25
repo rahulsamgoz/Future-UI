@@ -162,25 +162,21 @@ export function Editor() {
     }
   }
 
-  /** POST the proposal and poll it to a terminal state; throws when unavailable. */
-  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+  /** POST a proposal request and poll it to a terminal state; throws when unavailable. */
+  async function postProposalAndPoll(targetRequest: {
+    target: { kind: "selection"; entityId: string; runtimeInstanceId: string } | { kind: "page"; pageKey: string; pageContract: PageContract };
+    requestedCandidateCount: number;
+  }): Promise<ApiCandidateDto[]> {
     const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
-    // Same-origin /v1 goes through the dev-server proxy; an absolute
-    // VITE_API_BASE overrides it (tests, custom deployments).
     const base = apiBaseUrl ?? "";
     const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
     const request = {
       requestId: `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       operation: "propose_change" as const,
-      target: {
-        kind: "selection" as const,
-        entityId: instance.contract.entityKey,
-        runtimeInstanceId: instance.runtimeInstanceId,
-      },
       references,
       instruction,
       appBuildId: await resolveAppBuildId(base),
-      requestedCandidateCount: 4,
+      ...targetRequest,
     };
     const res = await fetch(
       `${base}/v1/projects/reference-app/proposals?access_token=${encodeURIComponent(token)}`,
@@ -205,6 +201,17 @@ export function Editor() {
       if (body.status === "failed") throw new Error(body.failure?.message ?? "proposal failed");
     }
     throw new Error("proposal polling timed out");
+  }
+
+  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+    return postProposalAndPoll({
+      target: {
+        kind: "selection" as const,
+        entityId: instance.contract.entityKey,
+        runtimeInstanceId: instance.runtimeInstanceId,
+      },
+      requestedCandidateCount: 4,
+    });
   }
 
   /**
@@ -427,43 +434,11 @@ export function Editor() {
     }
   }
 
-  /** POST a page-scope proposal and poll it to a terminal state; throws when unavailable. */
   async function proposePageViaApi(key: string, pageContract: PageContract): Promise<ApiCandidateDto[]> {
-    const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
-    const base = apiBaseUrl ?? "";
-    const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
-    const request = {
-      requestId: `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      operation: "propose_change" as const,
+    return postProposalAndPoll({
       target: { kind: "page" as const, pageKey: key, pageContract },
-      references,
-      instruction,
-      appBuildId: await resolveAppBuildId(base),
       requestedCandidateCount: 3,
-    };
-    const res = await fetch(
-      `${base}/v1/projects/reference-app/proposals?access_token=${encodeURIComponent(token)}`,
-      { method: "POST", headers, body: JSON.stringify({ request }) }
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const { proposalId } = (await res.json()) as { proposalId: string };
-
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await sleepProposals(500);
-      const poll = await fetch(
-        `${base}/v1/projects/reference-app/proposals/${encodeURIComponent(proposalId)}?access_token=${encodeURIComponent(token)}`,
-        { headers: { authorization: `Bearer ${token}` } }
-      );
-      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
-      const body = (await poll.json()) as {
-        status: string;
-        candidates?: ApiCandidateDto[];
-        failure?: { message?: string };
-      };
-      if (body.status === "ready") return body.candidates ?? [];
-      if (body.status === "failed") throw new Error(body.failure?.message ?? "proposal failed");
-    }
-    throw new Error("proposal polling timed out");
+    });
   }
 
   async function acceptLayout(candidate: PageLayoutCandidate) {

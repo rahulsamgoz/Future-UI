@@ -156,6 +156,22 @@ export function mergeSyncBundle(
       db.prepare(
         "INSERT OR IGNORE INTO sync_profiles (profile_id, owner_user_id, created_at) VALUES (?, ?, ?)"
       ).run(profileId, options.registerProfileOwner, nowIso());
+      // TOCTOU hardening (closure review): the caller's ownership pre-check is
+      // only a fast path — two concurrent requests can both pass it before
+      // either transaction commits. Re-read the ACTUAL owner here, inside the
+      // transaction: on mismatch the throw rolls back this merge, so a
+      // non-owner can never write preferences into a profile owned by another
+      // principal even if its INSERT OR IGNORE was silently ignored.
+      const actual = db
+        .prepare("SELECT owner_user_id FROM sync_profiles WHERE profile_id = ?")
+        .get(profileId) as { owner_user_id: string } | undefined;
+      if (actual && actual.owner_user_id !== options.registerProfileOwner) {
+        throw new UiIntelligenceError(
+          "FORBIDDEN",
+          `profile ${profileId} belongs to another principal`,
+          { httpStatus: 403 },
+        );
+      }
     }
     for (const record of bundle.preferences) {
       const identity = syncIdentityString(record.key);

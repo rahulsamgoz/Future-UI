@@ -552,8 +552,14 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
     }
     return { commitSha: args.commitSha, buildArtifactDigest, intentionallyUnbuildable, scenarios: results };
   } finally {
-    await server.close();
-    materialized.cleanup();
+    // Nested finally (closure review): a rejecting server.close() must not
+    // skip materialized.cleanup() — that would leak the git worktree and its
+    // temp directory on every failed reconstruction.
+    try {
+      await server.close();
+    } finally {
+      materialized.cleanup();
+    }
   }
 }
 
@@ -654,20 +660,21 @@ export async function executeManagedRun(args: ManagedRunArgs): Promise<ManagedRu
         repoUrl: repoDir,
         note: "captures reconstructed from the actual commit (worktree -> serve -> capture -> publish -> verify)",
       },
-      results: reconstruction.scenarios.map((scenario) => ({
-        scenarioId: scenario.scenarioId,
-        status: scenario.outcome === "captured" ? ("captured" as const) : ("failed" as const),
-        ...(scenario.captureId ? { captureId: scenario.captureId } : {}),
-        ...(scenario.artifactId ? { artifactId: scenario.artifactId } : {}),
-        ...((scenario.outcome === "failed" || scenario.outcome === "expected_failure") && scenario.error
-          ? {
-              error:
-                scenario.outcome === "expected_failure"
-                  ? `expected failure (intentionally unbuildable commit): ${scenario.error}`
-                  : scenario.error,
-            }
-          : {}),
-      })),
+      results: reconstruction.scenarios.map((scenario) => {
+        const result: ManagedScenarioResult = {
+          scenarioId: scenario.scenarioId,
+          status: scenario.outcome === "captured" ? "captured" : "failed",
+        };
+        if (scenario.captureId) result.captureId = scenario.captureId;
+        if (scenario.artifactId) result.artifactId = scenario.artifactId;
+        if (scenario.error && scenario.outcome !== "captured") {
+          result.error =
+            scenario.outcome === "expected_failure"
+              ? `expected failure (intentionally unbuildable commit): ${scenario.error}`
+              : scenario.error;
+        }
+        return result;
+      }),
     };
   }
 

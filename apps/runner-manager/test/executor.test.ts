@@ -14,14 +14,21 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CaptureManifest } from "@ui-intelligence/protocol";
-import { digestServedPage } from "@ui-intelligence/capture";
+import { browserGate, digestServedPage, probeChromium } from "@ui-intelligence/capture";
 import { defaultExecutor } from "../src/executor.js";
 import { buildTestApp, type FastifyInstanceLike } from "../../api/test/helpers.js";
 
 const REPO_ROOT = join(fileURLToPath(import.meta.url), "..", "..", "..", "..");
 const PROJECT = "proj_reference_app";
 
-describe("managed executor commit verification", () => {
+// Browser gate (closure review): both describes execute the REAL capture
+// path, so they need Playwright's Chromium. Fail loudly when it is missing
+// (never a silent skip); UI_INTEL_ALLOW_NO_BROWSER=1 opts out explicitly.
+const browserDecision = browserGate(await probeChromium());
+if (browserDecision.action === "fail") throw new Error(browserDecision.message);
+const browserDescribe = describe.skipIf(browserDecision.action === "skip");
+
+browserDescribe("managed executor commit verification", () => {
   describe("local repoUrl reconstructs the actual commit (real capture path)", () => {
     let dir: string;
     let corpusDir: string;

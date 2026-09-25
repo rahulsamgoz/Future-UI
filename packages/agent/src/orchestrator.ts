@@ -17,6 +17,7 @@ import {
   type ValidationReport,
 } from "@ui-intelligence/protocol";
 import type { ModelProvider, ProviderInput, ProviderReference, RendererPropertySchema, RendererSchema } from "./provider.js";
+import { referenceHasImageContent } from "./provider.js";
 
 export type OrchestratorPolicy = {
   maxCandidates: number;
@@ -139,16 +140,21 @@ export function imageReferenceNote(
   references: ProviderReference[],
   visionCapable: boolean
 ): { degraded: string } | undefined {
-  const imageRefs = references.filter((r) => r.kind === "image");
+  // Count every reference the vision path treats as an image input: image
+  // refs always (an image reference without grounded content is still a lost
+  // image), and history refs when they carry a grounded screenshot — the
+  // provider attaches both kinds (closure review: history references with
+  // screenshot bytes were previously dropped from this count).
+  const imageRefs = references.filter(
+    (r) => r.kind === "image" || (r.kind === "history" && referenceHasImageContent(r))
+  );
   if (imageRefs.length === 0) return undefined;
   if (!visionCapable) {
     return {
       degraded: `${imageRefs.length} image reference(s) ignored: provider not vision-capable`,
     };
   }
-  const usable = imageRefs.some(
-    (r) => (r.imageBytes?.length ?? 0) > 0 || (r.imageUrl !== undefined && r.imageUrl.length > 0)
-  );
+  const usable = imageRefs.some(referenceHasImageContent);
   if (!usable) {
     return {
       degraded: `${imageRefs.length} image reference(s) carried no usable image content (no bytes or fetchable url)`,

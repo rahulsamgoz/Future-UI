@@ -92,12 +92,6 @@ function buildProposal(
   } as Proposal & { contractVersion: number; dataBindingId: string; actionIds: string[] };
 }
 
-/** Read the stored contract version from a specification record's proposal. */
-function storedContractVersion(spec: { proposal: unknown }): number | undefined {
-  const v = (spec.proposal as { contractVersion?: unknown } | null)?.contractVersion;
-  return typeof v === "number" ? v : undefined;
-}
-
 export class PreferenceService {
   readonly store: PreferenceStore;
   readonly coordinator: OperationCoordinator;
@@ -527,7 +521,7 @@ export class PreferenceService {
       // A stale live view is a CONFLICT (a competing writer moved the store),
       // not a local failure: report it as such and re-read the winning state.
       if (isRevisionConflict(error)) {
-        for (const { key, scopeKey } of prepared) {
+        for (const { key } of prepared) {
           await this.handleRemoteCommit(key);
         }
         return { status: "conflict", applicationId, reason };
