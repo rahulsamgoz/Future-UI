@@ -1,0 +1,23 @@
+{
+  "name": "@ui-intelligence/runner-manager",
+  "version": "1.0.0",
+  "description": "Managed historical runner pool: schedules capture runs and leases them to capture-runner workers (R2 stream D)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --root ../..",
+    "start": "node dist/server.js",
+    "dev": "tsc -b && node dist/server.js"
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/capture": "1.0.0",
+    "fastify": "^4.28.1",
+    "better-sqlite3": "^11.3.0"
+  }
+}

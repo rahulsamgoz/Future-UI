@@ -1,0 +1,22 @@
+{
+  "name": "@ui-intelligence/next-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal Next.js 15 App Router demo: the same protocol contracts, runtime-core, React adapter, and renderers as the Vite reference app (R2 stream A).",
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start",
+    "test": "vitest run --root ../.."
+  },
+  "dependencies": {
+    "@ui-intelligence/protocol": "1.0.0",
+    "@ui-intelligence/react": "1.0.0",
+    "@ui-intelligence/renderers": "1.0.0",
+    "@ui-intelligence/runtime-core": "1.0.0",
+    "next": "^15.5.26",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

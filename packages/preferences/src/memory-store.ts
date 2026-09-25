@@ -9,7 +9,9 @@ import type {
   PreferenceExportBundle,
   PreferenceKey,
   PreferenceRecord,
+  SemanticRule,
   SpecificationRecord,
+  SyncOperation,
 } from "@ui-intelligence/protocol";
 import {
   PreferenceConflictError,
@@ -23,6 +25,11 @@ import type {
   StoredApplicationRecord,
   UndoResult,
 } from "./store.js";
+import {
+  readRulesFromRecord,
+  rulesKey,
+  validateRules,
+} from "./store.js";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -32,6 +39,7 @@ export class MemoryPreferenceStore implements PreferenceStore {
   #preferences = new Map<string, PreferenceRecord>();
   #specifications = new Map<string, SpecificationRecord>();
   #applications = new Map<string, StoredApplicationRecord>();
+  #syncOutbox = new Map<string, SyncOperation>();
 
   async getPreference(key: PreferenceKey): Promise<PreferenceRecord | null> {
     const record = this.#preferences.get(preferenceKeyToString(key));
@@ -285,9 +293,44 @@ export class MemoryPreferenceStore implements PreferenceStore {
       .map((application) => ({ ...application }));
   }
 
+  async getRules(profileId: string, projectId: string): Promise<SemanticRule[]> {
+    const record = this.#preferences.get(preferenceKeyToString(rulesKey(profileId, projectId)));
+    return record ? readRulesFromRecord(record) : [];
+  }
+
+  async putRules(profileId: string, projectId: string, rules: SemanticRule[]): Promise<void> {
+    const valid = validateRules(rules);
+    const key = rulesKey(profileId, projectId);
+    const identity = preferenceKeyToString(key);
+    const existing = this.#preferences.get(identity);
+    // The whole list is ONE record; a fresh revision keeps export/import
+    // monotonicity intact.
+    this.#preferences.set(identity, {
+      key: { ...key },
+      activeSpecificationDigest: null,
+      revision: (existing?.revision ?? 0) + 1,
+      contractVersion: 0,
+      updatedAt: nowIso(),
+      rules: [...valid],
+    } as PreferenceRecord);
+  }
+
+  async listOutbox(): Promise<SyncOperation[]> {
+    return [...this.#syncOutbox.values()].map((operation) => ({ ...operation, key: { ...operation.key } }));
+  }
+
+  async enqueueSync(operation: SyncOperation): Promise<void> {
+    this.#syncOutbox.set(operation.operationId, { ...operation, key: { ...operation.key } });
+  }
+
+  async clearSync(operationId: string): Promise<void> {
+    this.#syncOutbox.delete(operationId);
+  }
+
   close(): void {
     this.#preferences.clear();
     this.#specifications.clear();
     this.#applications.clear();
+    this.#syncOutbox.clear();
   }
 }

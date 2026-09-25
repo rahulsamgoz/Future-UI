@@ -35,6 +35,27 @@ const commitSyncSchema = z.object({
 export async function projectRoutes(app: FastifyInstance, deps: { db: Db }): Promise<void> {
   const { db } = deps;
 
+  app.post("/v1/projects", async (request, reply) => {
+    // Creating a project requires an operator-level principal in the dev
+    // profile (role assignment happens at creation via the users API).
+    if (!request.principal?.operator) {
+      return reply.code(403).send({ error: { code: "FORBIDDEN", message: "project creation is operator-only" } });
+    }
+    const body = request.body as { name?: string; repository?: string };
+    if (!body.name || !body.repository) {
+      return reply.code(422).send({ error: { code: "SCHEMA_INVALID", message: "name and repository are required" } });
+    }
+    const existing = db.prepare("SELECT id FROM projects WHERE name = ?").get(body.name);
+    if (existing) {
+      return reply.code(409).send({ error: { code: "SCHEMA_INVALID", message: `project ${body.name} already exists` } });
+    }
+    const id = `proj_${body.name.replace(/[^a-z0-9_]/gi, "_").toLowerCase()}`;
+    db.prepare(
+      "INSERT INTO projects (id, name, repository, policy_revision, meta_json, created_at) VALUES (?, ?, ?, 1, ?, ?)"
+    ).run(id, body.name, body.repository, JSON.stringify({ scenarios: [] }), new Date().toISOString());
+    return reply.code(201).send({ project: { id, name: body.name, repository: body.repository } });
+  });
+
   app.get("/v1/projects", async () => {
     const projects = listProjects(db);
     return {

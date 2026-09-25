@@ -16,6 +16,7 @@ import type {
   PreferenceExportBundle,
   PreferenceKey,
   PreferenceRecord,
+  SemanticRule,
   SpecificationRecord,
   SyncOperation,
 } from "@ui-intelligence/protocol";
@@ -30,6 +31,10 @@ import type {
   ProposedSpecificationEntry,
   StoredApplicationRecord,
   UndoResult,
+} from "./store.js";
+import {
+  rulesKey,
+  validateRules,
 } from "./store.js";
 
 const DATABASE_NAME = "ui-intelligence";
@@ -443,6 +448,36 @@ export class IdbPreferenceStore implements PreferenceStore {
     return this.#transaction(["applications"], "readonly", async (stores) => {
       const all = (await wrap(stores.applications.getAll())) as StoredApplicationRecord[];
       return status === undefined ? all : all.filter((a) => a.status === status);
+    });
+  }
+
+  async getRules(profileId: string, projectId: string): Promise<SemanticRule[]> {
+    const key = rulesKey(profileId, projectId);
+    return this.#transaction(["preferences"], "readonly", async (stores) => {
+      const value = (await wrap(stores.preferences.get(keyToArray(key)))) as
+        | (PreferenceRecord & { rules?: SemanticRule[] })
+        | undefined;
+      return value?.rules ? [...value.rules] : [];
+    });
+  }
+
+  async putRules(profileId: string, projectId: string, rules: SemanticRule[]): Promise<void> {
+    const valid = validateRules(rules);
+    const key = rulesKey(profileId, projectId);
+    await this.#transaction(["preferences"], "readwrite", async (stores) => {
+      const existing = (await wrap(stores.preferences.get(keyToArray(key)))) as
+        | PreferenceRecord
+        | undefined;
+      // The whole list is ONE record under the reserved scope key; a fresh
+      // revision keeps export/import monotonicity intact.
+      stores.preferences.put({
+        key,
+        activeSpecificationDigest: null,
+        revision: (existing?.revision ?? 0) + 1,
+        contractVersion: 0,
+        updatedAt: nowIso(),
+        rules: [...valid],
+      });
     });
   }
 

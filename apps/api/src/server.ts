@@ -6,7 +6,9 @@ import { randomUUID } from "node:crypto";
 import fastify, { type FastifyInstance } from "fastify";
 import type { Db } from "./db.js";
 import { migrate, openDb } from "./db.js";
-import { registerAuthAndErrors } from "./auth.js";
+import { registerAuthAndErrors, sendError } from "./auth.js";
+import { userRoutes } from "./routes/users.js";
+import { requireRole } from "./authz.js";
 import { ObjectStore } from "./objectstore.js";
 import { LexicalIndexCache, ScreenshotDecodeCache } from "./resolve.js";
 import { seedDevData } from "./seed.js";
@@ -40,18 +42,31 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer" }, rawParser);
   app.addContentTypeParser("image/png", { parseAs: "buffer" }, rawParser);
 
-  registerAuthAndErrors(app, { token });
+  registerAuthAndErrors(app, { token, db });
 
   // Canonicalize the project URL identifier: accept the stored project id or
   // the project name (e.g. "reference-app" → "proj_reference_app") so every
   // route and its foreign keys see the same id. Runs after auth.
-  app.addHook("preHandler", async (request) => {
+  app.addHook("preHandler", async (request, reply) => {
     const params = request.params as { p?: string } | undefined;
     if (params?.p) {
       const row = (await db)
         .prepare("SELECT id FROM projects WHERE id = ? OR name = ?")
         .get(params.p, params.p) as { id: string } | undefined;
       if (row) params.p = row.id;
+
+      // Role enforcement (R2 stream F): every project-scoped route requires at
+      // least viewer; mutating methods require member. Management routes
+      // (key/user provisioning) stay operator-only and live outside :p.
+      const principal = request.principal;
+      if (principal) {
+        const minimum = request.method === "GET" || request.method === "OPTIONS" ? "viewer" : "member";
+        const check = requireRole(principal, params.p, minimum);
+        if (!check.ok) {
+          sendError(reply, request.traceId, 403, "FORBIDDEN", check.reason);
+          return reply as never;
+        }
+      }
     }
   });
 
@@ -68,6 +83,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(entityRoutes, { db });
   await app.register(proposalRoutes, { db, indexCache, store, screenshotCache });
   await app.register(jobRoutes, { db });
+  await app.register(userRoutes, { db });
 
   app.get("/health", async () => ({ ok: true, traceId: randomUUID() }));
 

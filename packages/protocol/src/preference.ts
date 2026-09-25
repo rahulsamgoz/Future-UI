@@ -74,3 +74,45 @@ export type PreferenceExportBundle = {
 };
 
 export type ConflictResult = { status: "ok" } | { status: "conflict"; currentRevision: number };
+
+/**
+ * Device synchronization (R2 stream B, architecture section 9: "its future
+ * implementation uses revision-based conflicts, with conflicting layouts
+ * never silently merged").
+ *
+ * A device exports its local bundle (same shape as PreferenceExportBundle
+ * plus device identity) and pushes it; the server merges by highest revision
+ * per key and returns the authoritative bundle.
+ */
+export type SyncBundle = {
+  profileId: string;
+  projectId: string;
+  preferences: PreferenceRecord[];
+  specifications: SpecificationRecord[];
+  deviceLabel: string;
+  pushedAt: string;
+};
+
+/**
+ * Merge outcome per preference key (identity = syncIdentityString):
+ * - accepted: the pushed record was stored (higher revision) or already
+ *   agreed with the server (equal revision, equal digest).
+ * - serverWins: equal revision with a DIFFERENT digest — the server keeps
+ *   its record; the pushing device must retain its local specification as a
+ *   draft (never silently overwritten).
+ * - retainedAsDraft: the subset of serverWins keys the device should keep as
+ *   local drafts. The server reports the same keys as serverWins so the
+ *   classification survives round trips through any client.
+ * - authoritative: the merged server state after the push.
+ */
+export type SyncMergeResult = {
+  accepted: string[];
+  serverWins: string[];
+  retainedAsDraft: string[];
+  authoritative: SyncBundle;
+};
+
+/** Composite identity for a preference key within one sync bundle/profile. */
+export function syncIdentityString(key: Pick<PreferenceKey, "scope" | "scopeKey">): string {
+  return `${key.scope}:${key.scopeKey}`;
+}

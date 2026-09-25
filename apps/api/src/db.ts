@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { SCHEMA_SQL } from "./schema.js";
+import { AUTH_SCHEMA_SQL } from "./authz.js";
 
 export type Db = InstanceType<typeof Database>;
 
@@ -22,7 +23,8 @@ export function openDb(path: string): Db {
 }
 
 export function migrate(db: Db): void {
-  db.exec(SCHEMA_SQL);
+  db.exec(SCHEMA_SQL)
+  db.exec(AUTH_SCHEMA_SQL);
 }
 
 export function getJson<T>(row: unknown, column: string): T | null {

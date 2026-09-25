@@ -17,7 +17,7 @@ import {
 } from "../contracts.js";
 import { useAppServices } from "../Services.js";
 import { PageComposer } from "../app/PageComposer.js";
-import { useActivePreference, useActivePreferenceFor } from "../app/hooks.js";
+import { useActivePreference, useResolvedRepresentation } from "../app/hooks.js";
 import { appRendererMap } from "../kernel.js";
 
 export function useFixture(): FixtureKind {
@@ -49,8 +49,10 @@ export function CatalogPage() {
 
   const renderers = useMemo(() => appRendererMap(), [kernel]);
 
-  const mainPref = useActivePreferenceFor("catalog.productChooser", "catalog.main");
-  const relatedPref = useActivePreferenceFor("catalog.relatedProducts", "catalog.related");
+  // Representation resolution (R2 part C): explicit preference > rule >
+  // contract default, per product chooser instance.
+  const mainResolved = useResolvedRepresentation("catalog.productChooser", "catalog.main");
+  const relatedResolved = useResolvedRepresentation("catalog.relatedProducts", "catalog.related");
   const sortPref = useActivePreference("catalog.sortControl");
 
   const regions: Record<string, React.ReactNode> = {
@@ -60,8 +62,8 @@ export function CatalogPage() {
         bindings={{ data: dataBinding, actions, state: mainChooserState.current }}
         instanceKey="catalog.main"
         renderers={renderers}
-        preferredRepresentation={mainPref?.representation}
-        preferredProperties={mainPref?.properties}
+        preferredRepresentation={mainResolved?.representation}
+        preferredProperties={mainResolved?.properties}
         rendererOverride={
           <section className="chooser-fallback">
             <h2>Products</h2>
@@ -91,8 +93,8 @@ export function CatalogPage() {
         bindings={{ data: dataBinding, actions, state: relatedChooserState.current }}
         instanceKey="catalog.related"
         renderers={renderers}
-        preferredRepresentation={relatedPref?.representation}
-        preferredProperties={relatedPref?.properties}
+        preferredRepresentation={relatedResolved?.representation}
+        preferredProperties={relatedResolved?.properties}
       />
     ),
   };

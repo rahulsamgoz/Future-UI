@@ -19,7 +19,7 @@ import {
 } from "../contracts.js";
 import { useAppServices } from "../Services.js";
 import { PageComposer } from "../app/PageComposer.js";
-import { useActivePreference, useActivePreferenceFor } from "../app/hooks.js";
+import { useActivePreference, useResolvedRepresentation } from "../app/hooks.js";
 import { appRendererMap } from "../kernel.js";
 import { useFixture } from "./CatalogPage.js";
 
@@ -49,7 +49,8 @@ export function AccountPage() {
   const renderers = useMemo(() => appRendererMap(), [kernel]);
   const formPref = useActivePreference("account.profileForm");
   const txPref = useActivePreference("account.transactionList");
-  const buttonPref = useActivePreferenceFor("ui.primaryButton", "account.exportButton");
+  // Representation resolution (R2 part C): explicit preference > rule > contract default.
+  const buttonResolved = useResolvedRepresentation("ui.primaryButton", "account.exportButton");
   const panelPref = useActivePreference("account.adminPanel");
 
   const regions: Record<string, React.ReactNode> = {
@@ -133,8 +134,8 @@ export function AccountPage() {
           }}
           instanceKey="account.exportButton"
           renderers={renderers}
-          preferredRepresentation={buttonPref?.representation}
-          preferredProperties={buttonPref?.properties}
+          preferredRepresentation={buttonResolved?.representation}
+          preferredProperties={buttonResolved?.properties}
         />
       </section>
       {savedToast && <div className="toast" role="status">{savedToast}</div>}
