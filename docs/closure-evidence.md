@@ -305,3 +305,24 @@ npx vitest run apps/capture-runner/test/legacy-api.test.ts
 ### CI verification
 
 Merge-commit CI run on main must be green — verified after merge (run id recorded in the PR Testing section).
+
+---
+
+## Closure review follow-up (2026-09-25, second commit on `vorflux/closure`)
+
+Two review subagents (backend/capture/CI scope; generation/editor scope) plus a simplify pass reviewed the closure diff. Findings and resolutions:
+
+| # | Severity | Finding | Fix | Regression test |
+|---|----------|---------|-----|-----------------|
+| R1 | Major | `executeRunScenarios` lost the `historyApiFromEnv()` fallback — pool-spawned child workers received `historyApi: undefined` and would report every scenario failed in `capture.yml` managed runs. | `api: input.historyApi ?? historyApiFromEnv()` in `apps/capture-runner/src/managed.ts`. | `managed-publication.test.ts`: "falls back to HISTORY_API_* env when no historyApi is injected" (verification GETs hit the env-derived base URL); the "never reports captured" case stubbed hermetic with `vi.stubEnv("HISTORY_API_URL", "")`. |
+| R2 | Major | Sync ownership TOCTOU: the route-level owner read was outside the merge transaction — two concurrent requests could both pass, and the loser's `INSERT OR IGNORE` silently kept the winner's owner row while still writing the loser's preferences. | `mergeSyncBundle` re-reads the actual owner inside the transaction after `INSERT OR IGNORE` and throws FORBIDDEN on mismatch, rolling back the merge. | `sync-closure.test.ts`: "the in-transaction owner check rolls back a merge that lost the registration race (TOCTOU)". |
+| R3 | Minor | `reconstructCommit` leaked the git worktree when `server.close()` rejected (cleanup unreachable). | Nested `try { await server.close() } finally { materialized.cleanup() }`. | Covered by existing reconstruction suites (cleanup path unchanged on success). |
+| R4 | Minor | `capture.yml` coverage step used `|| true`, swallowing coverage failures. | Removed; the step now fails the workflow. | PyYAML validation of both workflows. |
+| R5 | Minor | `executor.test.ts` and `history-plan-fixture.test.ts` lacked the fail-loud browser gate. | Gate helpers moved to `packages/capture/src/browser-gate.ts` (exported from `@ui-intelligence/capture`); all three capture-path suites share them. | Existing gate-logic tests in `legacy-api.test.ts` now exercise the shared module; both suites gate via `describe.skipIf` / `it.skipIf` under `UI_INTEL_ALLOW_NO_BROWSER=1` and throw at collection otherwise. |
+| R6 | Medium | `imageReferenceNote()` counted only `kind === "image"` refs, but the provider's vision path also attaches `kind === "history"` refs carrying screenshots — dropped screenshots were under-counted. | Shared `referenceHasImageContent()` predicate in `packages/agent/src/provider.ts` (exactly the provider's attachment conditions); the note counts image refs plus content-bearing history refs. | `image-grounding.test.ts`: "counts image-bearing history references…" (unit) + "surfaces the history screenshot in the degraded note through the orchestrator" (2 refs → "2 image reference(s) ignored"). |
+| R7 | Low | `App.tsx` boot effect depends on `cart` identity — subtle but safe; a future per-render cart would re-boot in a loop. | Stability comment added at the dependency array. | Existing `persistence.test.tsx` suite (11 tests) covers the provider-injection path. |
+| R8 | Low (out of scope) | Index-worker byte grounding reads the fs layout only; S3 deployments fall back to the fetchable URL. | Surfaced as optional scope feedback (Pending); the URL fallback keeps vision grounding functional. | — |
+
+Simplify pass (same commit): `Editor.tsx` `postProposalAndPoll` unifies entity/page API paths; `PreferenceService` dead code removed; `processor.ts`/`worker.ts` share orchestrator construction; `executeManagedRun` result mapping made explicit.
+
+**Post-follow-up verification:** `npx vitest run` → 430 passed / 9 skipped / 0 failed; `npx tsc -b` clean.
