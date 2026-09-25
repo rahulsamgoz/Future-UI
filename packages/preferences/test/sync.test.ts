@@ -224,9 +224,10 @@ describe("SyncManager", () => {
     expect(device2.drafts.size).toBe(1);
 
     // Device 1 pulls the authoritative bundle: product chooser moves to
-    // revision 2 (device 2's spec), the button is already converged.
+    // revision 2 (device 2's spec); the button re-pushes as a no-op (equal
+    // revision, equal digest) and reports as accepted.
     const result1 = await device1.syncNow();
-    expect(result1.accepted).toEqual([]);
+    expect(result1.accepted).toEqual(["entity:ui.primaryButton"]);
     expect(result1.retainedAsDraft).toEqual([]);
 
     const chooser1 = await store1.getPreference(entityKey("catalog.productChooser"));

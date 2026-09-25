@@ -16,6 +16,7 @@ import { flagBool, flagString, parseArgv, splitList } from "./args.js";
 import { initConfig, loadConfig } from "./config.js";
 import type { Config } from "./config.js";
 import { buildHistoryPlan, resolveScenarioIds } from "./history.js";
+import { submitRun, waitForRun } from "./manager.js";
 
 const USAGE = `ui-intelligence CLI
 
@@ -23,6 +24,7 @@ Usage:
   ui-intel init --project <key> --api <baseUrl> --repo <url> [--force]
   ui-intel history plan --window <6mo|YYYY-MM-DD..YYYY-MM-DD> [--branches main] [--max-builds N] [--scenarios all|id,id] [--offline]
   ui-intel history run --plan-id <id>
+  ui-intel history submit --repo <url> --commit <sha> --scenarios id1,id2 [--manager <url>] [--project <id>] [--out file]
   ui-intel capture [--scenarios id,id] [--route /] [--out dir] [--url url] [--upload]
   ui-intel export --proposal-id <id> --out <file>
   ui-intel handoff --proposal-id <id> [--app-dir <dir>] [--base main] [--pr]
@@ -143,6 +145,62 @@ async function cmdHistoryRun(cwd: string, flags: Record<string, string | boolean
     }
   } finally {
     process.off("SIGINT", onSigint);
+  }
+}
+
+/**
+ * `history submit` (R2 stream D): schedule a capture run on the managed
+ * runner pool and poll it to completion.
+ */
+async function cmdHistorySubmit(cwd: string, flags: Record<string, string | boolean>): Promise<number> {
+  const repo = flagString(flags, "repo");
+  const commit = flagString(flags, "commit");
+  const scenarios = splitList(flagString(flags, "scenarios"));
+  if (!repo || !commit || scenarios.length === 0) {
+    console.error("history submit requires --repo <url>, --commit <sha>, and --scenarios id1,id2");
+    return 1;
+  }
+  const config = await loadConfig(cwd);
+  const managerUrl = flagString(flags, "manager") ?? process.env.UI_INTEL_RUNNER_URL ?? "http://localhost:8900";
+  const token = process.env.UI_INTEL_RUNNER_TOKEN ?? process.env.UI_INTELLIGENCE_TOKEN ?? "dev-token";
+  const projectId = flagString(flags, "project") ?? config?.projectId ?? "proj_reference_app";
+
+  let runId: string;
+  try {
+    runId = await submitRun({ managerUrl, token, projectId, repoUrl: repo, commitSha: commit, scenarios });
+  } catch (error) {
+    console.error(`history submit failed: ${(error as Error).message}`);
+    return 1;
+  }
+  console.log(`run ${runId} submitted to ${managerUrl}; polling until terminal (Ctrl-C detaches, the run continues server-side)`);
+
+  process.on("SIGINT", () => {
+    console.log(`\ndetached; run ${runId} continues. Check with: curl -H "Authorization: Bearer ${token}" ${managerUrl}/v1/runs/${runId}`);
+    process.exit(130);
+  });
+  try {
+    const run = await waitForRun(managerUrl, token, runId, {
+      onPoll: (r) => console.log(`status=${r.status} attempt=${r.attempt}`),
+    });
+    if (run.status === "succeeded") {
+      console.log(`run ${runId} succeeded`);
+      for (const r of run.results ?? []) {
+        console.log(`  ${r.scenarioId}: ${r.status}${r.captureId ? ` (capture ${r.captureId})` : ` (${r.error ?? "unknown error"})`}`);
+      }
+    } else {
+      console.error(`run ${runId} ${run.status}: ${run.error ?? "unknown error"}`);
+    }
+    const out = flagString(flags, "out");
+    if (out) {
+      const target = path.resolve(cwd, out);
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, `${JSON.stringify(run, null, 2)}\n`, "utf8");
+      console.log(`wrote ${target}`);
+    }
+    return run.status === "succeeded" ? 0 : 1;
+  } catch (error) {
+    console.error(`run polling failed: ${(error as Error).message}`);
+    return 1;
   }
 }
 
@@ -295,6 +353,7 @@ export async function main(argv: string[]): Promise<number> {
     if (head === "init") return await cmdInit(cwd, flags);
     if (head === "history" && sub === "plan") return await cmdHistoryPlan(cwd, flags);
     if (head === "history" && sub === "run") return await cmdHistoryRun(cwd, flags);
+    if (head === "history" && sub === "submit") return await cmdHistorySubmit(cwd, flags);
     if (head === "capture") return await cmdCapture(cwd, flags);
     if (head === "export") return await cmdExport(cwd, flags);
     if (head === "handoff") return await cmdHandoff(cwd, flags);

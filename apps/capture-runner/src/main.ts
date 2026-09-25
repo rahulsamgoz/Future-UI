@@ -8,6 +8,7 @@ import type { ScenarioRecipe } from "@ui-intelligence/capture";
 import type { CaptureEnvironment, CaptureManifest, JobRecord } from "@ui-intelligence/protocol";
 import { executeCaptureJob } from "./runner.js";
 import type { CaptureJobDeps } from "./runner.js";
+import { managedWorkerFromEnv } from "./managed.js";
 
 const POLL_MS = Number(process.env.POLL_MS ?? "3000");
 const API_BASE_URL = (process.env.API_BASE_URL ?? "http://localhost:4000").replace(/\/$/, "");
@@ -119,6 +120,12 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
-if (PROJECT_ID) {
+// Managed-worker mode (R2 stream D): RUNNER_MANAGER_URL points this process
+// at the runner-manager instead of the capture API. When set, the run
+// protocol (register/claim/heartbeat/complete) drives execution and the
+// scenarios are captured against APP_URL.
+if (managedWorkerFromEnv().started) {
+  // managed worker started; nothing else to do
+} else if (PROJECT_ID) {
   void loop();
 }

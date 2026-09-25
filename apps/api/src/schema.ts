@@ -175,6 +175,33 @@ CREATE TABLE IF NOT EXISTS runtime_manifests (
   manifest_json TEXT NOT NULL
 );
 
+-- Device-synced profile preferences (R2 stream B). The API itself holds no
+-- device preference state otherwise; this table is the server side of
+-- POST /v1/profiles/:profileId/sync, namespaced by opaque profile id.
+CREATE TABLE IF NOT EXISTS synced_preferences (
+  profile_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  scope TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  active_spec_digest TEXT,
+  spec_json TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (profile_id, project_id, scope, scope_key)
+);
+
+-- Retention/GC bookkeeping (R2 stream G): manual and scheduled runs record
+-- their outcome here; the index-worker's daily check reads MAX(finished_at).
+CREATE TABLE IF NOT EXISTS gc_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  deleted_count INTEGER NOT NULL DEFAULT 0,
+  dry_run INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_occurrences_capture ON occurrences(capture_id);
 CREATE INDEX IF NOT EXISTS idx_captures_project_scenario ON captures(project_id, scenario_id);
 `;

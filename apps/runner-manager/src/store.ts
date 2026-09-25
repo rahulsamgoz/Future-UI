@@ -152,9 +152,15 @@ function reapExpired(db: Db): void {
   const now = nowIso();
   const staleWorkerCutoff = new Date(Date.now() - WORKER_EXPIRY_MS).toISOString();
   db.prepare("UPDATE workers SET status = 'dead' WHERE status IN ('idle','busy') AND last_heartbeat < ?").run(staleWorkerCutoff);
+  // Re-queue runs whose lease expired OR whose worker died (dead workers
+  // cannot complete their runs even if the run lease is still current).
   db.prepare(
-    "UPDATE runs SET status = 'queued', worker_id = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ?)"
+    "UPDATE runs SET status = 'queued', worker_id = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < ? OR worker_id IN (SELECT id FROM workers WHERE status = 'dead'))"
   ).run(now, now);
+  // A live busy worker whose run was re-queued has nothing left to do.
+  db.prepare(
+    "UPDATE workers SET status = 'idle' WHERE status = 'busy' AND id NOT IN (SELECT worker_id FROM runs WHERE status = 'running' AND worker_id IS NOT NULL)"
+  ).run();
 }
 
 /**
