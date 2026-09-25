@@ -59,6 +59,12 @@ export type HistoryPlanInput = {
   maxBuilds: number;
   renderBudgetMs: number;
   timezone: string;
+  /**
+   * Optional local path to a reconstructable source repository (dev profile).
+   * Validated at plan time (existing directory, inside a configured root) and
+   * persisted with the plan so run submission can carry it into the scan job.
+   */
+  fixtureRepo?: string;
 };
 
 export type HistoryPlanRecord = {

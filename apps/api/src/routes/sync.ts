@@ -6,14 +6,22 @@
  * access any profile. The project derived from the body still requires
  * membership: ≥ viewer for a pull (no pushed preference records), ≥ member
  * for a write (any pushed preference records).
+ *
+ * Closure audit fixes:
+ * - Authorization happens BEFORE registration: project resolution and the
+ *   membership check run first, and the ownership INSERT is part of the merge
+ *   transaction — a rejected request (403/404/422) leaves NO ownership row.
+ * - Response identity: the authoritative bundle is returned under the SAME
+ *   project identifier the client submitted (stored rows stay canonical), so
+ *   devices syncing under the project NAME receive the records instead of
+ *   silently skipping them (finding 2).
  */
 import { UiIntelligenceError } from "@ui-intelligence/protocol";
 import type { SpecificationRecord, SyncBundle } from "@ui-intelligence/protocol";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
-import { nowIso } from "../db.js";
 import { requireRole } from "../authz.js";
-import { mergeSyncBundle, syncBundleSchema } from "../sync.js";
+import { mergeSyncBundle, relabelAuthoritativeProjectId, syncBundleSchema } from "../sync.js";
 
 export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promise<void> {
   const { db } = deps;
@@ -45,25 +53,10 @@ export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promis
       specifications: parsed.data.specifications as unknown as SpecificationRecord[],
     };
 
-    // Profile ownership: the first principal to sync a profile registers it;
-    // other (non-operator) principals are denied — profiles are never shared
-    // namespace across users.
-    if (!principal.operator) {
-      const owner = db
-        .prepare("SELECT owner_user_id FROM sync_profiles WHERE profile_id = ?")
-        .get(profileId) as { owner_user_id: string } | undefined;
-      if (!owner) {
-        db.prepare(
-          "INSERT OR IGNORE INTO sync_profiles (profile_id, owner_user_id, created_at) VALUES (?, ?, ?)"
-        ).run(profileId, principal.userId, nowIso());
-      } else if (owner.owner_user_id !== principal.userId) {
-        throw new UiIntelligenceError(
-          "FORBIDDEN",
-          `profile ${profileId} belongs to another principal`,
-          { httpStatus: 403 },
-        );
-      }
-    }
+    // The identifier the CLIENT submitted (project name or canonical id).
+    // Authorization is resolved against it; the authoritative response is
+    // relabeled back to it at the response boundary (finding 2).
+    const submittedProjectId = bundle.projectId;
 
     // Project derived from the BODY (not the profile): accept the stored id
     // or the project name, consistent with every :p route.
@@ -83,6 +76,28 @@ export async function syncRoutes(app: FastifyInstance, deps: { db: Db }): Promis
       throw new UiIntelligenceError("FORBIDDEN", check.reason, { httpStatus: 403 });
     }
 
-    return mergeSyncBundle(db, profileId, bundle);
+    // Profile ownership (finding 1): the ownership CHECK is read-only here;
+    // the ownership INSERT happens inside the merge transaction, after this
+    // request has been fully authorized — a rejected request leaves NO row.
+    if (!principal.operator) {
+      const owner = db
+        .prepare("SELECT owner_user_id FROM sync_profiles WHERE profile_id = ?")
+        .get(profileId) as { owner_user_id: string } | undefined;
+      if (owner && owner.owner_user_id !== principal.userId) {
+        throw new UiIntelligenceError(
+          "FORBIDDEN",
+          `profile ${profileId} belongs to another principal`,
+          { httpStatus: 403 },
+        );
+      }
+    }
+
+    const result = mergeSyncBundle(db, profileId, bundle, {
+      registerProfileOwner: principal.operator ? undefined : principal.userId,
+    });
+    // Return the authoritative bundle under the identifier the client sent
+    // (stored rows stay canonical) so the device's SyncManager — which
+    // applies only records matching its own namespace — accepts them.
+    return relabelAuthoritativeProjectId(result, submittedProjectId);
   });
 }

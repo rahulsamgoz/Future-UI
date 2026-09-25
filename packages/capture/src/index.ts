@@ -12,8 +12,11 @@ export { standardScenarios } from "./scenarios.js";
 export {
   UNBUILDABLE_MARKER,
   declaresUnbuildable,
+  digestServedPage,
   digestTree,
+  executeManagedRun,
   historyApiFromEnv,
+  isLocalRepoPath,
   materializeCommit,
   publishCapture,
   reconstructCommit,
@@ -24,6 +27,10 @@ export {
 } from "./reconstruct.js";
 export type {
   CommitReconstruction,
+  ManagedRunArgs,
+  ManagedRunOutcome,
+  ManagedRunProvenance,
+  ManagedScenarioResult,
   PublishedCapture,
   ReconstructCommitArgs,
   ReconstructionOutcome,

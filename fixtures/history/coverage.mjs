@@ -15,12 +15,12 @@
  * packages/capture reconstructCommit). The intentionally unbuildable commit
  * yields per-scenario EXPECTED failures — recorded, never faked.
  *
- * Viewport mapping: the 6 standard scenario recipes each carry their own
- * viewport (5 desktop, 1 mobile — packages/capture standardScenarios), so the
- * coverage matrix is commits x scenarios = 13 x 6 = 78 planned slots. The
- * spec's "12 commits x 6 scenarios x 2 viewports = 144" arithmetic maps to
- * per-recipe viewports covering both viewports across the scenario set, not
- * a literal 2x expansion per scenario.
+ * Viewport mapping (audit finding 3c): the SIX named route/state scenarios
+ * (catalog default/empty/loading, account default/loading/error) each exist in
+ * BOTH viewports — 12 per-commit recipes (packages/capture standardScenarios),
+ * so the coverage matrix is commits x scenario-recipes = 13 x 12 = 156 planned
+ * slots, matching the spec's "six named route/state scenarios across two
+ * viewports" arithmetic.
  *
  * Usage:
  *   node fixtures/history/coverage.mjs [--offline] [--out path]
@@ -58,7 +58,7 @@ try {
   execFileSync("node", [path.join(scriptDir, "generate.mjs"), fixtureDir], { encoding: "utf8" });
 
   const groundTruth = JSON.parse(readFileSync(path.join(fixtureDir, "ground-truth.json"), "utf8"));
-  const scenarioIds = groundTruth.corpus.scenarioIds; // 6 per-viewport recipes
+  const scenarioIds = groundTruth.corpus.scenarioIds; // 12 per-commit recipes (6 scenarios x 2 viewports)
 
   // Fixture commits in chronological order, matched to ground truth by index.
   const log = execFileSync(
@@ -198,7 +198,7 @@ try {
       plannedSlots: fixtureCommits.length * scenarioIds.length,
       runnable: groundTruth.corpus.runnable ?? false,
       viewportMapping:
-        "6 scenario recipes each carry their own viewport (5 desktop, 1 mobile); the spec's 12x6x2=144 arithmetic maps to commits x scenarios = 78 per-recipe-viewport slots covering both viewports across the scenario set",
+        "12 scenario recipes per commit: six named route/state scenarios x 2 viewports (desktop 1440x900, mobile 390x844); 13 commits x 12 recipes = 156 planned slots",
     },
     referenceBuild: {
       repositoryHeadSha: repoHeadSha,

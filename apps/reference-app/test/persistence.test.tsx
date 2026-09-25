@@ -17,8 +17,9 @@ import type { SpecificationRecord, SyncMergeResult } from "@ui-intelligence/prot
 import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
 import { ServicesContext, type AppServices } from "../src/Services.js";
 import { PreferenceService, type ApplyCandidate } from "../src/app/PreferenceService.js";
+import { App } from "../src/App.js";
 import { createAppKernel } from "../src/kernel.js";
-import { LocalGenerator } from "../src/editor/LocalGenerator.js";
+import { LocalGenerator, validatedCandidate } from "../src/editor/LocalGenerator.js";
 import { Editor } from "../src/editor/Editor.js";
 import {
   createCart,
@@ -27,7 +28,7 @@ import {
   createCartAddAction,
   createChooserStateAdapter,
 } from "../src/data/catalog.js";
-import { productChooserContract } from "../src/contracts.js";
+import { productChooserContract, allEntityContracts } from "../src/contracts.js";
 import type { EntityContract, JsonValue, TargetReadSet } from "@ui-intelligence/protocol";
 
 const SCOPE_KEY = "catalog.productChooser";
@@ -377,5 +378,207 @@ describe("device sync wiring (audit defect 3)", () => {
     const pref = await store.getPreference(keyFor(profileId));
     expect(pref?.activeSpecificationDigest).toBe("digest-server");
     expect(services.preferences.drafts.get(SCOPE_KEY)?.digest).toBe("digest-local");
+  });
+});
+
+describe("candidate generation context (audit finding 5)", () => {
+  function buildServices(): AppServices {
+    const kernel = createAppKernel();
+    for (const contract of allEntityContracts) {
+      kernel.registerEntity(contract, {
+        data: {
+          contract: { id: "placeholder", version: 1, schemaDigest: "sha256:placeholder" },
+          getSnapshot: () => ({ revision: "none", status: "loading" as const, value: null }),
+          subscribe: () => () => {},
+        },
+        actions: {},
+      });
+    }
+    const preferences = new PreferenceService();
+    const generator = new LocalGenerator(kernel);
+    return { kernel, preferences, generator, cart: createCart(), apiBaseUrl: null };
+  }
+
+  function kernelInstance() {
+    const kernel = createAppKernel();
+    const binding = createCatalogDataBinding("default", false);
+    const actions = {
+      "product.open@1": createProductOpenAction(() => {}),
+      "cart.add@1": createCartAddAction(createCart()),
+    };
+    kernel.registerEntity(productChooserContract, { data: binding, actions });
+    const instance = {
+      runtimeInstanceId: "ri_ctx",
+      entityKey: productChooserContract.entityKey,
+      entityId: `entity_${productChooserContract.entityKey}`,
+      contract: productChooserContract,
+      bindings: { data: binding, actions, state: createChooserStateAdapter() },
+      getNode: () => null,
+    } as unknown as RuntimeInstanceInfo;
+    return { kernel, instance };
+  }
+
+  async function writeWinner(store: MemoryPreferenceStore, profileId: string) {
+    await store.putSpecification(specRecord("digest-winning", 1));
+    await store.setPreference({
+      key: keyFor(profileId),
+      activeSpecificationDigest: "digest-winning",
+      revision: 3,
+      contractVersion: 1,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+  }
+
+  it("an OLD candidate (generated at revision 0) conflicts after the target moved to revision 3; the winner stays", async () => {
+    const { kernel, instance } = kernelInstance();
+    const generator = new LocalGenerator(kernel);
+    const store = new MemoryPreferenceStore();
+    const service = makeService("profile_ctx", store);
+    await service.init(SCOPES, VERSIONS);
+
+    // The candidate is generated while the live view displays revision 0.
+    const candidates = await generator.candidatesFor(instance, "make it a grid", [], 4, 0);
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates[0]!.readSet.preferenceRevision).toBe(0);
+
+    // Another writer stores revision 3; the broadcast refresh updates the
+    // displayed revision to 3.
+    await writeWinner(store, "profile_ctx");
+    await service.handleRemoteCommit(keyFor("profile_ctx"));
+    expect(service.active.get(SCOPE_KEY)?.revision).toBe(3);
+
+    // Accepting the OLD candidate must CONFLICT, not overwrite the winner.
+    const result = await service.apply(SCOPE_KEY, SCOPE_KEY, candidates[0]!, switcher, candidates[0]!.readSet);
+    expect(result.status).toBe("conflict");
+    const pref = await store.getPreference(keyFor("profile_ctx"));
+    expect(pref?.revision).toBe(3);
+    expect(pref?.activeSpecificationDigest).toBe("digest-winning");
+    // The live view shows the WINNING revision, not the rejected proposal.
+    expect(service.active.get(SCOPE_KEY)?.digest).toBe("digest-winning");
+    expect(service.active.get(SCOPE_KEY)?.revision).toBe(3);
+  });
+
+  it("batch candidates carry their generation context the same way", async () => {
+    const { kernel, instance } = kernelInstance();
+    const store = new MemoryPreferenceStore();
+    const service = makeService("profile_batch", store);
+    await service.init(SCOPES, VERSIONS);
+
+    // Batch candidate generated against revision 0.
+    const oldCandidate = await validatedCandidate(kernel, instance, "grid@1", { columns: 2 }, "generated", "grid", 0);
+    expect(oldCandidate).not.toBeNull();
+    expect(oldCandidate!.readSet.preferenceRevision).toBe(0);
+
+    await writeWinner(store, "profile_batch");
+    await service.handleRemoteCommit(keyFor("profile_batch"));
+
+    const stale = await service.applyBatch([
+      {
+        scopeKey: SCOPE_KEY,
+        entityKey: SCOPE_KEY,
+        candidate: oldCandidate!,
+        switcher,
+        readSet: oldCandidate!.readSet,
+      },
+    ]);
+    expect(stale.status).toBe("conflict");
+    let pref = await store.getPreference(keyFor("profile_batch"));
+    expect(pref?.revision).toBe(3);
+    expect(pref?.activeSpecificationDigest).toBe("digest-winning");
+
+    // A batch candidate generated AFTER the refresh (displayed revision 3)
+    // applies cleanly.
+    const fresh = await validatedCandidate(kernel, instance, "grid@1", { columns: 3 }, "generated", "grid", 3);
+    const ok = await service.applyBatch([
+      {
+        scopeKey: SCOPE_KEY,
+        entityKey: SCOPE_KEY,
+        candidate: fresh!,
+        switcher,
+        readSet: fresh!.readSet,
+      },
+    ]);
+    expect(ok.status).toBe("active");
+    pref = await store.getPreference(keyFor("profile_batch"));
+    expect(pref?.revision).toBe(4);
+    expect(pref?.activeSpecificationDigest).toBe(fresh!.digest);
+  });
+
+  it("a fresh candidate generated after the refresh applies cleanly", async () => {
+    const { kernel, instance } = kernelInstance();
+    const generator = new LocalGenerator(kernel);
+    const store = new MemoryPreferenceStore();
+    const service = makeService("profile_fresh_ctx", store);
+    await service.init(SCOPES, VERSIONS);
+
+    await writeWinner(store, "profile_fresh_ctx");
+    await service.handleRemoteCommit(keyFor("profile_fresh_ctx"));
+
+    // Generated AFTER the refresh, grounded on the displayed revision 3.
+    const candidates = await generator.candidatesFor(instance, "", [], 4, 3);
+    expect(candidates[0]!.readSet.preferenceRevision).toBe(3);
+    const result = await service.apply(SCOPE_KEY, SCOPE_KEY, candidates[0]!, switcher, candidates[0]!.readSet);
+    expect(result.status).toBe("active");
+    const pref = await store.getPreference(keyFor("profile_fresh_ctx"));
+    expect(pref?.revision).toBe(4);
+  });
+
+  it("the editor shows stale-candidates instead of applying when the target moved", async () => {
+    const services = buildServices();
+    const store = (services.preferences as unknown as { store: MemoryPreferenceStore }).store;
+    await services.preferences.init(SCOPES, VERSIONS);
+    const profileId = services.preferences.profileId;
+    // The selected region carries data-ui-instance="catalog.main": the editor
+    // applies to the INSTANCE-scoped key.
+    const instanceKey = {
+      profileId,
+      projectId: "reference-app",
+      scope: "instance" as const,
+      scopeKey: `${SCOPE_KEY}#catalog.main`,
+    };
+    const withServices = (ui: React.ReactNode) => (
+      <ServicesContext.Provider value={services}>
+        <UiRuntimeProvider kernel={services.kernel}>{ui}</UiRuntimeProvider>
+      </ServicesContext.Provider>
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed: network unreachable");
+      })
+    );
+
+    const user = userEvent.setup();
+    render(withServices(<App />));
+    await user.click(await screen.findByTestId("editor-open", undefined, { timeout: 4000 }));
+    await user.click(screen.getByTestId("select-mode"));
+    await user.click((await screen.findAllByText("Aurora Lamp"))[0]);
+    await waitFor(() => expect(screen.getByTestId("generate")).toBeTruthy());
+
+    // Generate local candidates while the displayed revision is 0.
+    await user.click(screen.getByTestId("generate"));
+    await waitFor(() => expect(screen.getAllByTestId("candidate").length).toBeGreaterThan(0));
+
+    // Another writer moves the store to revision 3; the broadcast refresh
+    // updates the displayed revision.
+    await store.putSpecification(specRecord("digest-winning", 1));
+    await store.setPreference({
+      key: instanceKey,
+      activeSpecificationDigest: "digest-winning",
+      revision: 3,
+      contractVersion: 1,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    });
+    await services.preferences.handleRemoteCommit(instanceKey);
+    expect(services.preferences.active.get(instanceKey.scopeKey)?.revision).toBe(3);
+
+    // Accepting the old candidate: CONFLICT surfaced, nothing applied.
+    await user.click(screen.getAllByTestId("accept")[0]!);
+    await waitFor(() => expect(screen.getByTestId("stale-candidates")).toBeTruthy());
+    expect(screen.getByTestId("stale-candidates").textContent).toContain("regenerate");
+    const pref = await store.getPreference(instanceKey);
+    expect(pref?.revision).toBe(3);
+    expect(pref?.activeSpecificationDigest).toBe("digest-winning");
   });
 });

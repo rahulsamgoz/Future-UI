@@ -17,6 +17,8 @@
   "dependencies": {
     "@ui-intelligence/protocol": "1.0.0",
     "@ui-intelligence/indexing": "1.0.0",
+    "@ui-intelligence/agent": "1.0.0",
+    "@ui-intelligence/runtime-core": "1.0.0",
     "@ui-intelligence/capture": "1.0.0",
     "@aws-sdk/client-s3": "^3.637.0",
     "better-sqlite3": "^11.3.0"

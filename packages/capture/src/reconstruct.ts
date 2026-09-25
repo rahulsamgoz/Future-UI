@@ -84,18 +84,16 @@ export const UNBUILDABLE_MARKER = "INTENTIONALLY_UNBUILDABLE";
 // ---------------------------------------------------------------------------
 
 /**
- * Adapt a standard scenario recipe for the fixture corpus. The recipes' routes
- * and viewports describe the reference app; fixture commits render the
- * committed UI at "/" regardless of route, and only the anchors they actually
- * declare (e.g. no account.profileForm), so readiness falls back to "some
- * data-ui-entity element is visible". Interactions and viewports apply as-is.
+ * Adapt a standard scenario recipe for the fixture corpus (audit finding 3b):
+ * recipes are used AS-IS. Routes are no longer rewritten to "/" (that rewrite
+ * made every account capture hit the catalog page) and readiness selectors are
+ * no longer loosened (the recipes' selectors match the anchors the fixture
+ * commits really declare — catalog.productChooser at "/", account.profileForm
+ * at "/#/account", which the fixture's host page hash-routes to account.html).
+ * Interactions and viewports apply as-is.
  */
 export function tolerantRecipe(recipe: ScenarioRecipe): ScenarioRecipe {
-  return {
-    ...recipe,
-    route: "/",
-    readiness: { ...recipe.readiness, selector: "[data-ui-entity]" },
-  };
+  return { ...recipe };
 }
 
 /** Resolve scenario ids/recipes to tolerant recipes. */
@@ -194,6 +192,22 @@ export function declaresUnbuildable(dir: string, marker: string): boolean {
   return false;
 }
 
+/**
+ * Build identity for a LIVE-APP capture (audit finding 3d): SHA-256 over the
+ * first response's HTML instead of the constant "runner-managed" digest, so
+ * captures of different served builds deduplicate differently. Throws when
+ * the app URL is not readable — a capture against an unreadable app would be
+ * worthless anyway.
+ */
+export async function digestServedPage(appUrl: string, doFetch: typeof fetch = fetch): Promise<string> {
+  const response = await doFetch(appUrl);
+  if (!response.ok) {
+    throw new Error(`cannot read served page at ${appUrl} for build digest (status ${response.status})`);
+  }
+  const html = await response.text();
+  return hashBytes(new TextEncoder().encode(html));
+}
+
 // ---------------------------------------------------------------------------
 // Static serving
 // ---------------------------------------------------------------------------
@@ -214,13 +228,22 @@ const MIME_TYPES: Record<string, string> = {
  * Tiny static file server (ephemeral port). The fixture corpus has no build
  * step — serving IS the build for this corpus. Real applications would run
  * their build pipeline here and serve the built output instead.
+ *
+ * Route mapping (audit finding 3b): /account serves account.html so the
+ * account scenarios capture the account page; every other document path
+ * falls back to index.html (the fixture host page hash-routes /#/account to
+ * the same account page).
  */
 export function serveStatic(dir: string): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
       try {
         const url = new URL(req.url ?? "/", "http://localhost");
-        const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
+        const pathname = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+        let rel: string;
+        if (pathname === "" || pathname === "/") rel = "index.html";
+        else if (pathname === "account" || pathname === "account/") rel = "account.html";
+        else rel = pathname;
         const abs = path.resolve(dir, rel);
         if (!abs.startsWith(path.resolve(dir) + path.sep) && abs !== path.resolve(dir)) {
           res.writeHead(403).end("forbidden");
@@ -532,4 +555,195 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
     await server.close();
     materialized.cleanup();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Managed-run execution (runner-manager executor + capture-runner managed mode)
+// ---------------------------------------------------------------------------
+
+/** True when repoUrl names a LOCAL path (dev profile); remote URLs do not. */
+export function isLocalRepoPath(repoUrl?: string): boolean {
+  if (!repoUrl) return false;
+  return !/^[a-z]+:\/\//i.test(repoUrl) && !repoUrl.startsWith("git@");
+}
+
+export type ManagedScenarioResult = {
+  scenarioId: string;
+  status: "captured" | "failed";
+  captureId?: string;
+  artifactId?: string;
+  error?: string;
+};
+
+export type ManagedRunProvenance = {
+  mode: "reconstructed" | "live-app";
+  commitSha?: string;
+  repoUrl?: string;
+  note?: string;
+};
+
+export type ManagedRunOutcome = {
+  provenance: ManagedRunProvenance;
+  results: ManagedScenarioResult[];
+};
+
+export type ManagedRunArgs = {
+  projectId: string;
+  /** Local path (triggers REAL commit reconstruction) or remote/absent (live app). */
+  repoUrl?: string;
+  commitSha: string;
+  scenarios: string[];
+  /** Base URL of the app under capture (live-app path). */
+  appUrl: string;
+  /** History API for durable publication; without it nothing can count as captured. */
+  api?: UploadApi;
+  redactionPolicy?: RedactionPolicy;
+  onLog?: (message: string) => void;
+  /** Injection seams for tests. */
+  deps?: {
+    uploader?: Pick<CaptureUploader, "upload">;
+    runner?: Pick<ScenarioRunner, "execute">;
+    fetch?: typeof fetch;
+    reconstruct?: typeof reconstructCommit;
+  };
+};
+
+/**
+ * Execute one managed run honestly (audit finding 3d). Two modes:
+ *
+ * - LOCAL repoUrl: reconstruct the ACTUAL commit (git worktree -> static
+ *   serve -> capture -> durable publish -> verify via reconstructCommit) and
+ *   report provenance mode "reconstructed". Captures carry that commit sha
+ *   and the real tree digest — the commit binding is VERIFIED.
+ * - REMOTE/absent repoUrl: capture the configured APP_URL, computing
+ *   buildArtifactDigest from the served page's first response HTML (never a
+ *   constant), and report provenance {mode: "live-app"} with the honest note
+ *   that the commit binding is asserted, not verified. A scenario is never
+ *   reported "captured" without durable publication + verification, and an
+ *   intentionally unbuildable reconstruction failure is reported as a failed
+ *   scenario with its expected-failure reason — never as a success.
+ */
+export async function executeManagedRun(args: ManagedRunArgs): Promise<ManagedRunOutcome> {
+  const log = args.onLog ?? (() => undefined);
+  const api = args.api;
+
+  if (isLocalRepoPath(args.repoUrl)) {
+    const repoDir = args.repoUrl as string;
+    if (!api) {
+      return {
+        provenance: { mode: "reconstructed", commitSha: args.commitSha, repoUrl: repoDir },
+        results: args.scenarios.map((scenarioId) => ({
+          scenarioId,
+          status: "failed" as const,
+          error: "history API not configured (HISTORY_API_URL): reconstruction cannot be durably published",
+        })),
+      };
+    }
+    log(`run reconstruction: local repo ${repoDir} @ ${args.commitSha}`);
+    const reconstruction = await (args.deps?.reconstruct ?? reconstructCommit)({
+      repoDir,
+      commitSha: args.commitSha,
+      scenarios: args.scenarios,
+      api,
+      onLog: log,
+    });
+    return {
+      provenance: {
+        mode: "reconstructed",
+        commitSha: args.commitSha,
+        repoUrl: repoDir,
+        note: "captures reconstructed from the actual commit (worktree -> serve -> capture -> publish -> verify)",
+      },
+      results: reconstruction.scenarios.map((scenario) => ({
+        scenarioId: scenario.scenarioId,
+        status: scenario.outcome === "captured" ? ("captured" as const) : ("failed" as const),
+        ...(scenario.captureId ? { captureId: scenario.captureId } : {}),
+        ...(scenario.artifactId ? { artifactId: scenario.artifactId } : {}),
+        ...((scenario.outcome === "failed" || scenario.outcome === "expected_failure") && scenario.error
+          ? {
+              error:
+                scenario.outcome === "expected_failure"
+                  ? `expected failure (intentionally unbuildable commit): ${scenario.error}`
+                  : scenario.error,
+            }
+          : {}),
+      })),
+    };
+  }
+
+  // Live-app path: capture the configured APP_URL with an honest build digest
+  // and honest provenance.
+  const redactionPolicy: RedactionPolicy = args.redactionPolicy ?? { version: "1", masks: [] };
+  let buildArtifactDigest: string;
+  try {
+    buildArtifactDigest = await digestServedPage(args.appUrl, args.deps?.fetch);
+  } catch (error) {
+    return {
+      provenance: {
+        mode: "live-app",
+        commitSha: args.commitSha,
+        note: "commit binding asserted, not verified — remote/absent repoUrl",
+      },
+      results: args.scenarios.map((scenarioId) => ({
+        scenarioId,
+        status: "failed" as const,
+        error: (error as Error).message,
+      })),
+    };
+  }
+  const runner =
+    args.deps?.runner ?? new ScenarioRunner({ baseUrl: args.appUrl, adapterVersion: "unknown", redactionPolicy });
+  const environment: CaptureEnvironment = {
+    runnerImageDigest: "local",
+    browserRevision: "bundled-playwright",
+    fontsDigest: "unknown",
+    adapterVersion: "unknown",
+    captureToolVersion: "1.0.0",
+    redactionPolicyDigest: await digestOf(redactionPolicy),
+  };
+  const results: ManagedScenarioResult[] = [];
+  for (const scenarioId of args.scenarios) {
+    const recipe = standardScenarios().find((r) => r.id === scenarioId);
+    if (!recipe) {
+      results.push({ scenarioId, status: "failed", error: `unknown scenario id "${scenarioId}"` });
+      continue;
+    }
+    try {
+      const { manifest, screenshotBytes } = await runner.execute(recipe, {
+        projectId: args.projectId,
+        commitSha: args.commitSha,
+        buildArtifactDigest,
+        environment,
+      });
+      if (!api) {
+        results.push({
+          scenarioId,
+          status: "failed",
+          error: "history API not configured (HISTORY_API_URL): capture executed but NOT durably published",
+        });
+        continue;
+      }
+      const published = await publishCapture({
+        manifest,
+        screenshotBytes,
+        api,
+        uploader: args.deps?.uploader,
+        fetch: args.deps?.fetch,
+        // Spec section 11: equivalent work is deduplicated by (commit,
+        // scenario, build digest) — here with the REAL served-page digest.
+        dedupe: { commitSha: args.commitSha, scenarioId: recipe.id, buildArtifactDigest },
+      });
+      results.push({ scenarioId, status: "captured", captureId: published.captureId, artifactId: published.artifactId });
+    } catch (error) {
+      results.push({ scenarioId, status: "failed", error: (error as Error).message });
+    }
+  }
+  return {
+    provenance: {
+      mode: "live-app",
+      commitSha: args.commitSha,
+      note: "commit binding asserted, not verified — remote/absent repoUrl",
+    },
+    results,
+  };
 }

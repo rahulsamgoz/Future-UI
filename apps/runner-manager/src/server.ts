@@ -18,6 +18,7 @@ import type { ErrorCode } from "@ui-intelligence/protocol";
 import type { Db } from "./db.js";
 import { migrate, nowIso, openDb } from "./db.js";
 import { defaultExecutor, type RunExecutor } from "./executor.js";
+import type { ManagedRunProvenance } from "@ui-intelligence/capture";
 import { runPool, type PoolHandle } from "./pool.js";
 import {
   claimNextRun,
@@ -130,6 +131,7 @@ export function buildManager(options: ManagerOptions): FastifyInstance {
       maxAttempts: run.maxAttempts,
       error: run.error,
       results: run.results,
+      provenance: run.provenance,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
     };
@@ -169,7 +171,7 @@ export function buildManager(options: ManagerOptions): FastifyInstance {
     const body = request.body as {
       workerId?: unknown;
       leaseToken?: unknown;
-      result?: { results?: unknown };
+      result?: { results?: unknown; provenance?: { mode?: unknown; note?: unknown; commitSha?: unknown; repoUrl?: unknown } };
       error?: unknown;
     };
     const workerId = typeof body.workerId === "string" ? body.workerId : "";
@@ -188,11 +190,25 @@ export function buildManager(options: ManagerOptions): FastifyInstance {
           );
         })
       : undefined;
+    // Honest provenance (audit finding 3d): the run record keeps how the
+    // captures bind to the requested commit.
+    const rawProvenance = body.result?.provenance;
+    const rawMode = rawProvenance?.mode;
+    const provenance: ManagedRunProvenance | undefined =
+      rawMode === "reconstructed" || rawMode === "live-app"
+        ? {
+            mode: rawMode,
+            ...(typeof rawProvenance?.note === "string" ? { note: rawProvenance.note } : {}),
+            ...(typeof rawProvenance?.commitSha === "string" ? { commitSha: rawProvenance.commitSha } : {}),
+            ...(typeof rawProvenance?.repoUrl === "string" ? { repoUrl: rawProvenance.repoUrl } : {}),
+          }
+        : undefined;
     const outcome = completeRun(db, id, {
       workerId,
       leaseToken,
       succeeded: !body.error,
       results,
+      provenance,
       error: typeof body.error === "string" ? body.error : undefined,
     });
     return { ok: true, status: outcome.status };

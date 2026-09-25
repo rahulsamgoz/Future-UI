@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Db } from "../db.js";
 import { enqueueJob, insertOutbox } from "../jobs.js";
-import { planHistory } from "../planner.js";
+import { planHistory, resolveFixtureRepo } from "../planner.js";
 import { getHistoryPlan, getProject, listProjects } from "../store.js";
 
 const historyPlanInputSchema = z.object({
@@ -18,6 +18,10 @@ const historyPlanInputSchema = z.object({
   maxBuilds: z.number().int().positive(),
   renderBudgetMs: z.number().nonnegative(),
   timezone: z.string().min(1),
+  // Audit finding 3a: the reconstructable source repo travels with the plan
+  // (validated + persisted) instead of being stripped, so run submission can
+  // hand it to the history_scan job and reconstruction can actually run.
+  fixtureRepo: z.string().min(1).optional(),
 });
 
 const commitSyncSchema = z.object({
@@ -118,20 +122,35 @@ export async function historyPlanRoutes(app: FastifyInstance, deps: { db: Db }):
         details: parsed.error.issues,
       });
     }
-    const record = planHistory(db, projectId, parsed.data);
+    // Audit finding 3a: validate + resolve fixtureRepo at plan time (existing
+    // directory, inside the configured reconstruct roots) and persist the
+    // resolved absolute path with the plan input.
+    const input = parsed.data.fixtureRepo
+      ? { ...parsed.data, fixtureRepo: resolveFixtureRepo(parsed.data.fixtureRepo) }
+      : parsed.data;
+    const record = planHistory(db, projectId, input);
     return reply.code(201).send(record);
   });
 
   app.post("/v1/projects/:p/history-plans/:id/runs", async (request, reply) => {
     const projectId = (request.params as { p: string }).p;
     const planId = (request.params as { id: string }).id;
-    if (!getHistoryPlan(db, projectId, planId)) {
+    const plan = getHistoryPlan(db, projectId, planId);
+    if (!plan) {
       throw new UiIntelligenceError("NOT_FOUND", `history plan ${planId} not found`, { httpStatus: 404 });
     }
+    // Audit finding 3a: run submission copies the plan's fixtureRepo into the
+    // job payload so the history_scan worker sees a repo path and can actually
+    // reconstruct the selected commits (worker handleHistoryScan reads it from
+    // the payload first, then from the plan input).
     const jobId = enqueueJob(db, {
       projectId,
       kind: "history_scan",
-      payload: { planId, projectId },
+      payload: {
+        planId,
+        projectId,
+        ...(plan.input.fixtureRepo ? { fixtureRepo: plan.input.fixtureRepo } : {}),
+      },
       dedupKey: `history_scan:${planId}`,
       stage: "planning",
     });

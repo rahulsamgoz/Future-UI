@@ -108,8 +108,38 @@ export function authoritativeBundle(db: Db, profileId: string, projectId: string
   };
 }
 
+/**
+ * Response-boundary identity translation (closure audit, finding 2): the
+ * client submits ITS project identifier (the reference app uses the project
+ * NAME "reference-app"; other clients may use the canonical id). Stored rows
+ * always keep the CANONICAL project id, but the authoritative bundle handed
+ * back to the caller must use the SAME identifier the client sent — the
+ * SyncManager on the device applies only records whose key.projectId matches
+ * its own namespace, so a canonical-only response would be silently skipped.
+ * Only the response is relabeled; rows in synced_preferences stay canonical,
+ * and records of other projects are never included (namespace isolation).
+ */
+export function relabelAuthoritativeProjectId(result: SyncMergeResult, projectId: string): SyncMergeResult {
+  return {
+    ...result,
+    authoritative: {
+      ...result.authoritative,
+      projectId,
+      preferences: result.authoritative.preferences.map((record) => ({
+        ...record,
+        key: { ...record.key, projectId },
+      })),
+    },
+  };
+}
+
 /** Merge one pushed bundle into synced_preferences within a single transaction. */
-export function mergeSyncBundle(db: Db, profileId: string, bundle: SyncBundle): SyncMergeResult {
+export function mergeSyncBundle(
+  db: Db,
+  profileId: string,
+  bundle: SyncBundle,
+  options?: { registerProfileOwner?: string },
+): SyncMergeResult {
   const accepted: string[] = [];
   const serverWins: string[] = [];
   const specificationsByDigest = new Map(
@@ -117,6 +147,16 @@ export function mergeSyncBundle(db: Db, profileId: string, bundle: SyncBundle): 
   );
 
   const tx = db.transaction(() => {
+    // Profile registration is part of the SAME transaction as the merge
+    // (closure audit, finding 1): the ownership row is only created when the
+    // request has already been authorized (project resolved + membership
+    // checked by the caller) and the merge is actually running. A rejected
+    // request never reaches this point, so it leaves no ownership row.
+    if (options?.registerProfileOwner) {
+      db.prepare(
+        "INSERT OR IGNORE INTO sync_profiles (profile_id, owner_user_id, created_at) VALUES (?, ?, ?)"
+      ).run(profileId, options.registerProfileOwner, nowIso());
+    }
     for (const record of bundle.preferences) {
       const identity = syncIdentityString(record.key);
       const existing = db

@@ -8,7 +8,7 @@ import { nowIso } from "../db.js";
 import { enqueueJob, insertOutbox } from "../jobs.js";
 import { resolveTarget, type LexicalIndexCache, type ScreenshotGroundingDeps } from "../resolve.js";
 import { getProject, getProposal, getRuntimeManifest, listProposals } from "../store.js";
-import type { StoredProposalTarget } from "../processor.js";
+import type { StoredPageTarget, StoredProposalTarget } from "../processor.js";
 
 export type ProposalDeps = { db: Db; indexCache: LexicalIndexCache } & ScreenshotGroundingDeps;
 
@@ -29,6 +29,49 @@ export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): 
       });
     }
     const uiRequest = parsed.data;
+
+    // Page scope (audit finding 4): no entity resolution — the target IS the
+    // page. Layout candidates are validated server-side against the
+    // submitted page contract and revalidated at acceptance against the
+    // app's own contracts (PageComposer), so a permissive submitted contract
+    // cannot reach the rendered page.
+    if (uiRequest.target.kind === "page") {
+      const pageContract = uiRequest.target.pageContract;
+      if (pageContract.pageKey !== uiRequest.target.pageKey) {
+        throw new UiIntelligenceError("SCHEMA_INVALID", "pageContract.pageKey does not match the target pageKey", {
+          httpStatus: 422,
+        });
+      }
+      const manifest = getRuntimeManifest(db, projectId);
+      if (!manifest) {
+        throw new UiIntelligenceError("NOT_FOUND", `no runtime manifest for project ${projectId}`, { httpStatus: 404 });
+      }
+      const pageTarget: StoredPageTarget = {
+        pageKey: uiRequest.target.pageKey,
+        pageContract,
+        currentReadSet: {
+          appBuildId: uiRequest.appBuildId,
+          contractDigest: manifest.contractDigest,
+          policyVersion: project.policyRevision,
+          preferenceRevision: 0,
+          entityVersions: {},
+        },
+      };
+      const pageProposalId = newId("proposal");
+      const pageNow = nowIso();
+      db.prepare(
+        "INSERT INTO proposals (id, project_id, request_json, target_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)"
+      ).run(pageProposalId, projectId, JSON.stringify(uiRequest), JSON.stringify(pageTarget), pageNow, pageNow);
+      const pageJobId = enqueueJob(db, {
+        projectId,
+        kind: "proposal",
+        payload: { proposalId: pageProposalId, projectId },
+        dedupKey: `proposal:${pageProposalId}`,
+        stage: "planning",
+      });
+      insertOutbox(db, projectId, pageJobId);
+      return reply.code(202).send({ proposalId: pageProposalId, jobId: pageJobId });
+    }
 
     const resolved = await resolveTarget(db, projectId, indexCache, uiRequest.target, { store, screenshotCache });
     if (resolved.status === "ambiguous") {

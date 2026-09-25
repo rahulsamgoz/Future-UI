@@ -1,9 +1,11 @@
 import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { ProviderInput } from "@ui-intelligence/agent";
 import { processProposal } from "../src/processor.js";
 import { dbReferenceLoader } from "../src/references.js";
+import { ObjectStore } from "../src/objectstore.js";
 import { buildTestApp } from "./helpers.js";
 
 const PROJECT = "proj_reference_app";
@@ -54,6 +56,68 @@ describe("proposal processor reference grounding", () => {
     // Unresolvable references stay null (orchestrator falls back to placeholder).
     expect(await load({ kind: "history", captureId: "cap_nope" })).toBeNull();
   });
+
+  it("returns bytes + a fetchable URL for an uploaded PNG (audit finding 4)", async () => {
+    const { app, cleanup: done } = await appRef;
+    cleanup = done;
+    const db = app.db;
+    const store = new ObjectStore(join(dir, "artifacts"));
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9]);
+    const digest = createHash("sha256").update(png).digest("hex");
+    await store.put(digest, Buffer.from(png));
+    db.prepare(
+      "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES ('art_img_1', ?, 'image', ?, 'image/png', ?, 'project', 'standard', ?)"
+    ).run(PROJECT, digest, png.byteLength, new Date().toISOString());
+
+    const load = dbReferenceLoader(db, PROJECT, { store, publicApiBase: "https://api.example.dev" });
+
+    // Image reference: BYTES first, plus an absolute URL built from the
+    // configured external base and the raw artifact endpoint.
+    const grounded = await load({ kind: "image", artifactId: "art_img_1" });
+    expect(grounded).not.toBeNull();
+    expect(grounded!.artifactId).toBe("art_img_1");
+    expect(Array.from(grounded!.imageBytes!)).toEqual(Array.from(png));
+    expect(grounded!.imageMediaType).toBe("image/png");
+    expect(grounded!.imageUrl).toBe(`https://api.example.dev/v1/artifacts/art_img_1/raw?projectId=${PROJECT}`);
+
+    // Without an injected store, the URL is still produced (bytes fall back).
+    const urlOnly = dbReferenceLoader(db, PROJECT, { publicApiBase: "https://api.example.dev" });
+    const groundedNoStore = await urlOnly({ kind: "image", artifactId: "art_img_1" });
+    expect(groundedNoStore!.imageBytes).toBeUndefined();
+    expect(groundedNoStore!.imageUrl).toBe(`https://api.example.dev/v1/artifacts/art_img_1/raw?projectId=${PROJECT}`);
+  });
+
+  it("attaches the screenshot artifact bytes/URL to grounded history references", async () => {
+    const { app } = await appRef;
+    const db = app.db;
+    const now = new Date().toISOString();
+
+    const png = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const digest = createHash("sha256").update(png).digest("hex");
+    await new ObjectStore(join(dir, "artifacts")).put(digest, Buffer.from(png));
+    db.prepare(
+      "INSERT INTO artifacts (id, project_id, kind, digest, mime_type, byte_size, visibility, retention, created_at) VALUES ('art_shot_9', ?, 'screenshot', ?, 'image/png', ?, 'project', 'standard', ?)"
+    ).run(PROJECT, digest, png.byteLength, now);
+
+    db.prepare(
+      "INSERT OR IGNORE INTO builds (id, project_id, commit_sha, artifact_digest, outcome, created_at) VALUES ('build_ref9', ?, 'cafe5678', 'ad', 'succeeded', ?)"
+    ).run(PROJECT, now);
+    db.prepare(
+      "INSERT INTO captures (id, project_id, build_id, scenario_id, commit_sha, evidence_label, manifest_json, manifest_digest, request_key, created_at) VALUES ('cap_ref9', ?, 'build_ref9', 'catalog-desktop', 'cafe5678', 'captured_at_build', ?, 'md', 'rk_ref9', ?)"
+    ).run(
+      PROJECT,
+      JSON.stringify({ artifacts: [{ artifactId: "art_shot_9", kind: "screenshot-png", digest, byteSize: png.byteLength, mimeType: "image/png" }] }),
+      now
+    );
+
+    const load = dbReferenceLoader(db, PROJECT, { store: new ObjectStore(join(dir, "artifacts")), publicApiBase: "http://localhost:8787" });
+    const grounded = await load({ kind: "history", captureId: "cap_ref9" });
+    expect(grounded!.artifactId).toBe("art_shot_9");
+    expect(Array.from(grounded!.imageBytes!)).toEqual(Array.from(png));
+    expect(grounded!.imageUrl).toBe(`http://localhost:8787/v1/artifacts/art_shot_9/raw?projectId=${PROJECT}`);
+  });
+
 
   it("processProposal hands the grounded reference content to the provider", async () => {
     const { app } = await appRef;

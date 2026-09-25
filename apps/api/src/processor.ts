@@ -4,12 +4,15 @@
  * claim SQL — cross-app imports are not allowed.
  */
 import { ProposalOrchestrator, SpecValidator, DeterministicProvider, type ModelProvider, type RendererSchema } from "@ui-intelligence/agent";
+import { ProposalValidator, RendererRegistry } from "@ui-intelligence/runtime-core";
+import type { PageContract, TargetReadSet, UiRequest } from "@ui-intelligence/protocol";
 import type { JobKind } from "@ui-intelligence/protocol";
 import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 import { claimJob, completeJob, enqueueJob, insertOutbox } from "./jobs.js";
 import { getHistoryPlan, getProposal, updateHistoryPlanStatus } from "./store.js";
 import { dbReferenceLoader, type ReferenceLoader } from "./references.js";
+import type { ObjectStore } from "./objectstore.js";
 
 export type StoredProposalTarget = {
   entityId: string;
@@ -26,18 +29,36 @@ export type StoredProposalTarget = {
   rendererSchemas: RendererSchema[];
 };
 
+/** Stored target for page-scope proposals (audit finding 4). */
+export type StoredPageTarget = {
+  pageKey: string;
+  pageContract: PageContract;
+  currentReadSet: TargetReadSet;
+};
+
 export type ProposalProcessingOptions = {
   provider?: ModelProvider;
   maxCandidates?: number;
   timeoutMs?: number;
   /** Overrides the default DB-backed reference loader (tests). */
   loadReference?: ReferenceLoader;
+  /** Object store for image-reference byte grounding (audit finding 4). */
+  store?: ObjectStore;
+  /** External base URL for fetchable artifact URLs (UI_INTEL_PUBLIC_API_BASE). */
+  publicApiBase?: string;
 };
 
 /** Run the proposal through the orchestrator and persist the outcome. */
 export async function processProposal(db: Db, projectId: string, proposalId: string, options: ProposalProcessingOptions = {}): Promise<void> {
   const proposal = getProposal(db, projectId, proposalId);
   if (!proposal) throw new Error(`proposal ${proposalId} not found`);
+
+  const request = proposal.request as UiRequest;
+  // Page scope (audit finding 4): layout candidates validated against the
+  // page contract with runtime-core's ProposalValidator.validatePageLayout.
+  if (request.target.kind === "page") {
+    return processPageProposal(db, projectId, proposalId, proposal, request, options);
+  }
 
   const target = proposal.target as StoredProposalTarget;
   const validator = new SpecValidator({
@@ -51,11 +72,57 @@ export async function processProposal(db: Db, projectId: string, proposalId: str
     validator,
     // Ground history/image references into real stored content before the
     // provider sees them (captures/occurrences/artifacts live in this DB).
-    loadReference: options.loadReference ?? dbReferenceLoader(db, projectId),
+    // The object store grounds artifact BYTES for vision providers.
+    loadReference: options.loadReference ?? dbReferenceLoader(db, projectId, { store: options.store, publicApiBase: options.publicApiBase }),
     policy: { maxCandidates: options.maxCandidates ?? 4, timeoutMs: options.timeoutMs ?? 15_000 },
   });
 
-  const settled = await orchestrator.propose(proposal.request, target);
+  const settled = await orchestrator.propose(request, target);
+  await persistProposalOutcome(db, proposalId, settled);
+}
+
+/** Page-scope proposal processing (audit finding 4). */
+async function processPageProposal(
+  db: Db,
+  projectId: string,
+  proposalId: string,
+  proposal: NonNullable<ReturnType<typeof getProposal>>,
+  request: UiRequest,
+  options: ProposalProcessingOptions
+): Promise<void> {
+  const stored = proposal.target as unknown as StoredPageTarget;
+  const pageContract = stored.pageContract;
+  const pageValidator = new ProposalValidator(new RendererRegistry());
+  const orchestrator = new ProposalOrchestrator({
+    provider: options.provider ?? new DeterministicProvider(),
+    // The entity validator is unused on the page path (proposePage validates
+    // through validatePageLayout); a permissive instance satisfies the dep.
+    validator: new SpecValidator({
+      allowedRepresentations: [...pageContract.allowedLayouts],
+      propertySchemas: {},
+      dataBinding: `page:${pageContract.pageKey}`,
+      allowedActions: [],
+    }),
+    loadReference: options.loadReference ?? dbReferenceLoader(db, projectId, { store: options.store, publicApiBase: options.publicApiBase }),
+    validatePageLayout: (root, contract, entityContracts, readSet, policyVersion) =>
+      pageValidator.validatePageLayout(root, contract, entityContracts, readSet, policyVersion),
+    policy: { maxCandidates: options.maxCandidates ?? 4, timeoutMs: options.timeoutMs ?? 15_000 },
+  });
+
+  const settled = await orchestrator.proposePage(request, {
+    pageKey: stored.pageKey,
+    pageContract,
+    currentReadSet: stored.currentReadSet,
+  });
+  await persistProposalOutcome(db, proposalId, settled);
+}
+
+/** Persist the orchestrator outcome (shared by both scopes). */
+async function persistProposalOutcome(
+  db: Db,
+  proposalId: string,
+  settled: Awaited<ReturnType<ProposalOrchestrator["propose"]>>
+): Promise<void> {
   db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
     settled.status,
     settled.candidates.length > 0 ? JSON.stringify(settled.candidates) : null,
@@ -95,7 +162,7 @@ export async function processJobInline(
   db: Db,
   projectId: string,
   jobId: string,
-  options: { provider?: ModelProvider } = {}
+  options: ProposalProcessingOptions = {}
 ): Promise<string> {
   const claim = claimJob(db, projectId, jobId, "api-inline");
   const row = db.prepare("SELECT kind, payload_json FROM jobs WHERE id = ?").get(jobId) as {
