@@ -25,6 +25,7 @@ export type ScenarioResult = {
   scenarioId: string;
   status: "captured" | "failed";
   captureId?: string;
+  artifactId?: string;
   error?: string;
 };
 

@@ -45,7 +45,7 @@ const git = (args: string[]): string => execFileSync("git", args, { cwd: repoDir
 function elementsAt(sha: string): LineageSide {
   const files = git(["ls-tree", "-r", "--name-only", sha])
     .split("\n")
-    .filter((f) => /\.(js|tsx|jsx|css)$/.test(f));
+    .filter((f) => /\.(js|tsx|jsx|css|html)$/.test(f));
   const textsByAnchor = new Map<string, Set<string>>();
   for (const file of files) {
     const source = git(["show", `${sha}:${file}`]);
@@ -164,7 +164,7 @@ describe("lineage ground-truth evaluation (fixtures/history corpus)", () => {
   it("handles the A->B->A visual reversion with anchor continuity (continues_as at score 1.0)", () => {
     const shas = git(["log", "--reverse", "--format=%H"]).trim().split("\n");
     const rendererDefault = (sha: string): string =>
-      git(["show", `${sha}:src/features/catalog/ProductChooser.tsx`]).match(/renderer = "([^"]+)"/)![1]!;
+      git(["show", `${sha}:app.js`]).match(/var renderer = "([^"]+)"/)![1]!;
     // Commits 5, 10, 11: carousel (A) -> grid (B) -> carousel (A).
     expect(rendererDefault(shas[4]!)).toBe("carousel@1");
     expect(rendererDefault(shas[9]!)).toBe("grid@1");

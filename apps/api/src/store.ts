@@ -265,10 +265,25 @@ export function getJob(db: Db, projectId: string, jobId: string): JobRecord | nu
   return row ? jobRecordFromRow(row) : null;
 }
 
-export function listJobs(db: Db, projectId: string, limit = 100): JobRecord[] {
+export function listJobs(
+  db: Db,
+  projectId: string,
+  limit = 100,
+  filters: { kind?: string; status?: string } = {}
+): JobRecord[] {
+  const clauses = ["project_id = ?"];
+  const params: unknown[] = [projectId];
+  if (filters.kind) {
+    clauses.push("kind = ?");
+    params.push(filters.kind);
+  }
+  if (filters.status) {
+    clauses.push("status = ?");
+    params.push(filters.status);
+  }
   const rows = db
-    .prepare("SELECT * FROM jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?")
-    .all(projectId, limit) as Array<Record<string, unknown>>;
+    .prepare(`SELECT * FROM jobs WHERE ${clauses.join(" AND ")} ORDER BY created_at DESC LIMIT ?`)
+    .all(...params, limit) as Array<Record<string, unknown>>;
   return rows.map(jobRecordFromRow);
 }
 

@@ -149,7 +149,7 @@ export function currentBuildArtifactIds(db: Db): Set<string> {
   return ids;
 }
 
-export function runGc(db: Db, store: ObjectStore, options: GcOptions): GcResult {
+export async function runGc(db: Db, store: ObjectStore, options: GcOptions): Promise<GcResult> {
   if (!(options.retentionDays > 0)) {
     throw new UiIntelligenceError("SCHEMA_INVALID", "retentionDays must be a positive number", { httpStatus: 422 });
   }
@@ -216,9 +216,13 @@ export function runGc(db: Db, store: ObjectStore, options: GcOptions): GcResult 
   }
 
   if (!dryRun) {
+    // Object bytes first (awaited — audit fix, finding 4): if byte deletion
+    // fails the rows stay, so no capture ever references a deleted object.
+    for (const deletion of deleted) {
+      await store.delete(deletion.digest);
+    }
     const tx = db.transaction(() => {
       for (const deletion of deleted) {
-        store.delete(deletion.digest);
         db.prepare("DELETE FROM artifacts WHERE id = ?").run(deletion.artifactId);
       }
     });

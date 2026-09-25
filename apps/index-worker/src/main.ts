@@ -24,16 +24,14 @@ export async function main(): Promise<void> {
     // Immediate check + hourly re-checks; runScheduledGc skips when the
     // last successful run (gc_runs) is younger than 24h.
     try {
-      runScheduledGc(db, { retentionDays: gcRetentionDays, log });
+      await runScheduledGc(db, { retentionDays: gcRetentionDays, log });
     } catch (error) {
       log(`scheduled gc failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     gcTimer = setInterval(() => {
-      try {
-        runScheduledGc(db, { retentionDays: gcRetentionDays, log });
-      } catch (error) {
+      void runScheduledGc(db, { retentionDays: gcRetentionDays, log }).catch((error: unknown) => {
         log(`scheduled gc failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      });
     }, 60 * 60 * 1000);
   }
 

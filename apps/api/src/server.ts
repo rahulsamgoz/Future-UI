@@ -9,7 +9,7 @@ import { migrate, openDb } from "./db.js";
 import { registerAuthAndErrors, sendError } from "./auth.js";
 import { userRoutes } from "./routes/users.js";
 import { requireRole } from "./authz.js";
-import { ObjectStore, createStorageDriver } from "./objectstore.js";
+import { ObjectStore, createStorageDriver, type S3LikeClient } from "./objectstore.js";
 import { LexicalIndexCache, ScreenshotDecodeCache } from "./resolve.js";
 import { seedDevData } from "./seed.js";
 import { artifactRoutes } from "./routes/artifacts.js";
@@ -25,6 +25,10 @@ export type BuildAppOptions = {
   db: Db;
   storeDir?: string;
   token?: string;
+  /** Storage driver override for tests ("fs" | "s3"); env otherwise. */
+  storageDriver?: string;
+  /** Injected S3 client for tests (used when the s3 driver is selected). */
+  s3Client?: S3LikeClient;
 };
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -33,9 +37,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const fsRoot = options.storeDir ?? process.env.UI_INTEL_STORE ?? "./data/artifacts";
   // Storage driver selection (R2 stream G): fs default, s3 when configured.
   const selection = createStorageDriver({
-    driver: process.env.UI_INTEL_STORAGE_DRIVER,
+    driver: options.storageDriver ?? process.env.UI_INTEL_STORAGE_DRIVER,
     s3Bucket: process.env.UI_INTEL_S3_BUCKET,
     s3Prefix: process.env.UI_INTEL_S3_PREFIX,
+    ...(options.s3Client ? { s3Client: options.s3Client } : {}),
     fsRoot,
     log: (message) => console.log(message), // eslint-disable-line no-console
   });
@@ -88,7 +93,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   await app.register(historyPlanRoutes, { db });
   await app.register(commitRoutes, { db });
   await app.register(artifactRoutes, { db, store });
-  await app.register(captureRoutes, { db, indexCache });
+  await app.register(captureRoutes, { db, indexCache, store });
   await app.register(manifestRoutes, { db });
   await app.register(resolveRoutes, { db, indexCache, store, screenshotCache });
   await app.register(entityRoutes, { db });

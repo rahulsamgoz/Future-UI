@@ -45,8 +45,11 @@ export type CaptureJobDeps = {
   api: {
     claim(jobId: string): Promise<{ leaseToken: string }>;
     heartbeat(jobId: string, leaseToken: string): Promise<void>;
-    complete(jobId: string, result: { result: { captureId: string } }): Promise<void>;
+    /** leaseToken must travel with the completion (the API rejects otherwise). */
+    complete(jobId: string, leaseToken: string, result: { result: { captureId: string } }): Promise<void>;
     cancelled(jobId: string, body: { reason: string }): Promise<void>;
+    /** Fresh job record for pre-claim cancellation checks; optional for tests. */
+    getJob?(jobId: string): Promise<JobRecord | null>;
   };
   /** Returns true when a shutdown signal was received. */
   isCancelling?: () => boolean;
@@ -54,12 +57,25 @@ export type CaptureJobDeps = {
 
 export type CaptureJobOutcome =
   | { status: "completed"; captureId: string }
-  | { status: "cancelled"; captureId: string };
+  | { status: "cancelled"; captureId: string }
+  /** Job already terminal before claiming (e.g. cancelled while queued). */
+  | { status: "skipped"; captureId: null };
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
+/** Terminal job statuses (protocol jobStatusSchema). */
+const TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+
 /** Execute one claimed capture job: claim -> capture -> upload -> complete. */
 export async function executeCaptureJob(job: JobRecord, deps: CaptureJobDeps): Promise<CaptureJobOutcome> {
+  // Pre-claim checkpoint: a job that reached a terminal state (most notably a
+  // cancellation while queued) must not be claimed or published.
+  if (deps.api.getJob) {
+    const current = await deps.api.getJob(job.jobId);
+    if (current && TERMINAL_STATUSES.has(current.status)) {
+      return { status: "skipped", captureId: null };
+    }
+  }
   const { leaseToken } = await deps.api.claim(job.jobId);
   const heartbeat = setInterval(() => {
     void deps.api.heartbeat(job.jobId, leaseToken).catch(() => undefined);
@@ -83,7 +99,7 @@ export async function executeCaptureJob(job: JobRecord, deps: CaptureJobDeps): P
       await deps.api.cancelled(job.jobId, { reason: "worker received shutdown signal during capture" });
       return { status: "cancelled", captureId };
     }
-    await deps.api.complete(job.jobId, { result: { captureId } });
+    await deps.api.complete(job.jobId, leaseToken, { result: { captureId } });
     return { status: "completed", captureId };
   } finally {
     clearInterval(heartbeat);

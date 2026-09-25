@@ -1,7 +1,9 @@
 /**
  * Capture ingestion (spec sections 5, 11, 12). Verifies all referenced
- * artifacts, then commits capture + occurrences + build + job + outbox in one
- * SQLite transaction. Idempotent by the idempotency-key header.
+ * artifacts (rows AND stored bytes — audit fix, finding 4: a capture
+ * referencing an artifact whose bytes were never uploaded is rejected 422),
+ * then commits capture + occurrences + build + job + outbox in one SQLite
+ * transaction. Idempotent by the idempotency-key header.
  */
 import { captureManifestSchema, digestOf, UiIntelligenceError } from "@ui-intelligence/protocol";
 import type { FastifyInstance } from "fastify";
@@ -9,14 +11,16 @@ import type { Db } from "../db.js";
 import { enqueueJob, insertOutbox } from "../jobs.js";
 import { getArtifact, getCaptureByRequestKey, listCaptures } from "../store.js";
 import type { LexicalIndexCache } from "../resolve.js";
+import type { ObjectStore } from "../objectstore.js";
 
 export type CaptureDeps = {
   db: Db;
   indexCache: LexicalIndexCache;
+  store: ObjectStore;
 };
 
 export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Promise<void> {
-  const { db, indexCache } = deps;
+  const { db, indexCache, store } = deps;
 
   app.post("/v1/projects/:p/captures", async (request, reply) => {
     const projectId = (request.params as { p: string }).p;
@@ -64,6 +68,16 @@ export async function captureRoutes(app: FastifyInstance, deps: CaptureDeps): Pr
         throw new UiIntelligenceError("SCHEMA_INVALID", `artifact ${artifactRef.artifactId} digest or size mismatch`, {
           httpStatus: 422,
         });
+      }
+      // The bytes must actually be in the object store: a reserved artifact
+      // id whose slot was never filled (visibility 'pending', no uploaded
+      // bytes) cannot back a capture manifest.
+      if (!(await store.exists(artifact.digest as string))) {
+        throw new UiIntelligenceError(
+          "SCHEMA_INVALID",
+          `artifact ${artifactRef.artifactId} has no uploaded bytes in the object store`,
+          { httpStatus: 422 },
+        );
       }
     }
 

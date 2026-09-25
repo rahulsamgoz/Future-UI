@@ -3,18 +3,20 @@
  *
  * The GC rules live in apps/api/src/gc.ts (tested there); this module
  * reimplements the small read/delete SQL locally BY DESIGN — cross-app
- * imports are not allowed (same policy as the job claim SQL below). The
- * worker runs it once per interval (default 24h) when GC_RETENTION_DAYS is
+ * imports are not allowed (same policy as the job claim SQL). The worker
+ * runs it once per interval (default 24h) when GC_RETENTION_DAYS is
  * configured, guarded by the shared gc_runs table.
  *
- * Object bytes are deleted through the fs driver layout (<root>/<xx>/<digest>).
- * When UI_INTEL_STORAGE_DRIVER=s3 the scheduled run is SKIPPED entirely
- * (byte deletion is not possible here without the S3 SDK; use the API GC
- * route or run the API process) — deleting rows without bytes would leave
- * unreferenced objects behind.
+ * Object bytes are deleted through a storage driver selected from the env:
+ * the fs layout (<root>/<xx>/<digest>) by default, or the real S3 SDK
+ * (DeleteObjectCommand, awaited) when UI_INTEL_STORAGE_DRIVER=s3 with a
+ * bucket configured (audit fix, finding 4 — the former "skip GC when s3 is
+ * configured" behavior is removed now that byte deletion is possible
+ * remotely and awaited).
  */
 import { existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { DeleteObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { newId } from "@ui-intelligence/protocol";
 import type { WorkerDb } from "./worker.js";
 
@@ -27,11 +29,17 @@ export type ScheduledGcOptions = {
   artifactRoot?: string;
   dryRun?: boolean;
   log?: (message: string) => void;
+  /** Override the storage-driver env selection (tests). */
+  driver?: "fs" | "s3";
+  s3Bucket?: string;
+  s3Prefix?: string;
+  /** Injected S3 client for tests (used when the s3 driver is selected). */
+  s3Client?: { send(command: unknown): Promise<unknown> };
 };
 
 export type ScheduledGcOutcome = {
   ran: boolean;
-  reason?: "disabled" | "not_due" | "s3_driver_unsupported";
+  reason?: "disabled" | "not_due";
   deletedCount?: number;
 };
 
@@ -109,17 +117,17 @@ export function lastGcRunAt(db: WorkerDb): string | null {
 
 /**
  * Daily-gated GC run. Returns { ran: false, reason } when skipped. Throws
- * UiIntelligenceError-shaped Errors only for configuration problems.
+ * Errors only for configuration problems; storage failures propagate.
  */
-export function runScheduledGc(db: WorkerDb, options: ScheduledGcOptions): ScheduledGcOutcome {
+export async function runScheduledGc(db: WorkerDb, options: ScheduledGcOptions): Promise<ScheduledGcOutcome> {
   const log = options.log ?? (() => undefined);
   if (!(options.retentionDays > 0)) {
     throw new Error("runScheduledGc requires a positive retentionDays (GC_RETENTION_DAYS)");
   }
-  const driver = process.env.UI_INTEL_STORAGE_DRIVER ?? "fs";
-  if (driver === "s3") {
-    log("scheduled gc: UI_INTEL_STORAGE_DRIVER=s3 — worker-side gc skipped (use the API GC route)");
-    return { ran: false, reason: "s3_driver_unsupported" };
+  const driver = options.driver ?? (process.env.UI_INTEL_STORAGE_DRIVER as "fs" | "s3" | undefined) ?? "fs";
+  const s3Bucket = options.s3Bucket ?? process.env.UI_INTEL_S3_BUCKET;
+  if (driver === "s3" && !s3Bucket) {
+    throw new Error("runScheduledGc: UI_INTEL_STORAGE_DRIVER=s3 requires UI_INTEL_S3_BUCKET");
   }
   const now = options.now ?? new Date();
   const intervalHours = options.intervalHours ?? 24;
@@ -157,14 +165,31 @@ export function runScheduledGc(db: WorkerDb, options: ScheduledGcOptions): Sched
     return { ran: true, deletedCount: 0 };
   }
 
-  const artifactRoot = resolve(options.artifactRoot ?? process.env.UI_INTEL_STORE ?? "./data/artifacts");
   if (!options.dryRun) {
-    const tx = db.transaction(() => {
+    if (driver === "s3") {
+      // Real remote deletion, awaited per object (S3 key = prefix + R1
+      // digest-sharded layout, matching the API's S3StorageDriver).
+      const prefix = options.s3Prefix ?? process.env.UI_INTEL_S3_PREFIX ?? "";
+      const client = options.s3Client ?? new S3Client({});
+      for (const artifact of doomed) {
+        await client.send(
+          new DeleteObjectCommand({
+            Bucket: s3Bucket,
+            Key: `${prefix}${artifact.digest.slice(0, 2)}/${artifact.digest}`,
+          }),
+        );
+      }
+    } else {
+      const artifactRoot = resolve(options.artifactRoot ?? process.env.UI_INTEL_STORE ?? "./data/artifacts");
       for (const artifact of doomed) {
         const path = join(artifactRoot, artifact.digest.slice(0, 2), artifact.digest);
         if (existsSync(path)) {
           rmSync(path, { force: true });
         }
+      }
+    }
+    const tx = db.transaction(() => {
+      for (const artifact of doomed) {
         db.prepare("DELETE FROM artifacts WHERE id = ?").run(artifact.id);
       }
     });

@@ -9,6 +9,26 @@ export { buildObservationsFromEvaluation, buildOccurrenceId, redactText, sanitiz
 export { CaptureUploader } from "./uploader.js";
 export type { UploadApi, UploadResult } from "./uploader.js";
 export { standardScenarios } from "./scenarios.js";
+export {
+  UNBUILDABLE_MARKER,
+  declaresUnbuildable,
+  digestTree,
+  historyApiFromEnv,
+  materializeCommit,
+  publishCapture,
+  reconstructCommit,
+  resolveScenarios,
+  serveStatic,
+  tolerantRecipe,
+  verifyPublication,
+} from "./reconstruct.js";
+export type {
+  CommitReconstruction,
+  PublishedCapture,
+  ReconstructCommitArgs,
+  ReconstructionOutcome,
+  ScenarioReconstruction,
+} from "./reconstruct.js";
 export type {
   EntityEvaluation,
   RedactionMask,

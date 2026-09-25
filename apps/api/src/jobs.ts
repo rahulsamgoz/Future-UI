@@ -14,6 +14,14 @@ import { jobRecordFromRow } from "./store.js";
 
 const LEASE_MS = 30_000;
 
+/**
+ * Terminal job statuses. "completed_with_gaps" is written by the index worker
+ * when a history scan finished but the dev profile could not reconstruct
+ * captures for every selected commit — the jobs table's status column is
+ * free-form TEXT, so the API tolerates and preserves it.
+ */
+const TERMINAL_STATUSES = ["succeeded", "failed", "cancelled", "completed_with_gaps"];
+
 export type EnqueueOptions = {
   projectId: string;
   kind: JobKind;
@@ -79,7 +87,7 @@ export function claimJob(db: Db, projectId: string, jobId: string, workerId: str
     if (leaseValid) {
       throw new UiIntelligenceError("STALE_REVISION", "job is running under an active lease", { httpStatus: 409 });
     }
-    if (status === "succeeded" || status === "failed" || status === "cancelled") {
+    if (TERMINAL_STATUSES.includes(status as string)) {
       throw new UiIntelligenceError("STALE_REVISION", `job is already ${status}`, { httpStatus: 409 });
     }
     const leaseToken = newId("lease");
@@ -122,7 +130,7 @@ export function completeJob(db: Db, projectId: string, jobId: string, leaseToken
     const row = rowOrNull(db, projectId, jobId);
     if (!row) throw new UiIntelligenceError("NOT_FOUND", `job ${jobId} not found`, { httpStatus: 404 });
     const status = row.status as string;
-    const terminal = status === "succeeded" || status === "failed" || status === "cancelled";
+    const terminal = TERMINAL_STATUSES.includes(status);
     if (terminal) {
       // Idempotent replay with the same lease is a no-op.
       if (row.lease_token === leaseToken) return;
@@ -187,7 +195,7 @@ export function cancelJob(db: Db, projectId: string, jobId: string): JobRecord {
     } else if (status === "running") {
       // Signal active work; the worker honors it at its next checkpoint.
       db.prepare("UPDATE jobs SET cancel_requested = 1, updated_at = ? WHERE id = ?").run(nowIso(), jobId);
-    } else if (status !== "succeeded" && status !== "failed" && status !== "cancelled") {
+    } else if (!TERMINAL_STATUSES.includes(status as string)) {
       throw new UiIntelligenceError("STALE_REVISION", `cannot cancel job in status ${status}`, { httpStatus: 409 });
     }
   });

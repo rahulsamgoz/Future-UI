@@ -5,6 +5,7 @@
  */
 import {
   newId,
+  type DesignReference,
   type Proposal,
   type ProposalCandidate,
   type ProposalStatus,
@@ -12,7 +13,7 @@ import {
   type UiRequest,
   type ValidationReport,
 } from "@ui-intelligence/protocol";
-import type { ModelProvider, ProviderInput, RendererPropertySchema } from "./provider.js";
+import type { ModelProvider, ProviderInput, ProviderReference, RendererPropertySchema } from "./provider.js";
 
 export type OrchestratorPolicy = {
   maxCandidates: number;
@@ -46,6 +47,16 @@ export type OrchestratorDeps = {
   validator: {
     validate(spec: unknown, readSet: TargetReadSet, policyVersion: number): ValidationReport;
   };
+  /**
+   * Optional async loader that grounds design references into real content
+   * before they reach the provider. For a history reference it should return
+   * the capture's observation (visibleText, anchor, commit, evidence label)
+   * and screenshot artifact id; for an image reference the artifact id (and
+   * url when one can be produced). When absent, or when it returns null or
+   * throws, the orchestrator falls back to the neutral placeholder summary so
+   * generation degrades gracefully instead of failing.
+   */
+  loadReference?: (ref: DesignReference) => Promise<ProviderReference | null>;
   policy?: Partial<OrchestratorPolicy>;
 };
 
@@ -76,15 +87,16 @@ export class ProposalOrchestrator {
       this.policy.maxCandidates
     );
 
+    const references: ProviderReference[] = [];
+    for (const ref of request.references) {
+      references.push(await this.groundReference(ref));
+    }
+
     const providerInput: ProviderInput = {
       instruction: request.instruction,
       targetContract: { ...target.contract },
       rendererSchemas: target.rendererSchemas,
-      references: request.references.map((r) => {
-        if (r.kind === "history") return { kind: "history" as const, summary: `history capture ${r.captureId}` };
-        if (r.kind === "image") return { kind: "image" as const, summary: `image artifact ${r.artifactId}` };
-        return { kind: "text" as const, summary: r.text };
-      }),
+      references,
       requestedCandidateCount: requested,
     };
 
@@ -144,6 +156,27 @@ export class ProposalOrchestrator {
     }
 
     return { proposalId, status: "ready", candidates };
+  }
+
+  /**
+   * Ground one design reference. With a loadReference dep the provider sees
+   * the REAL observation content (text, anchor, commit, screenshot artifact)
+   * instead of a placeholder id string; without one the historical
+   * placeholder summaries are kept so existing behavior and tests hold.
+   */
+  private async groundReference(ref: DesignReference): Promise<ProviderReference> {
+    if (ref.kind === "text") return { kind: "text", summary: ref.text };
+    if (this.deps.loadReference) {
+      try {
+        const grounded = await this.deps.loadReference(ref);
+        if (grounded) return grounded;
+      } catch {
+        // fall through to the placeholder below — grounding must never break
+        // proposal generation.
+      }
+    }
+    if (ref.kind === "history") return { kind: "history", summary: `history capture ${ref.captureId}` };
+    return { kind: "image", summary: `image artifact ${ref.artifactId}` };
   }
 
   private async withTimeout(

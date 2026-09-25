@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { JsonValue, LayoutNode, StateAdapter } from "@ui-intelligence/protocol";
+import type { DesignReference, JsonValue, LayoutNode, StateAdapter, ValidationReport } from "@ui-intelligence/protocol";
 import { useSelection } from "@ui-intelligence/react";
 import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
 import { createControlledDataProvider, createStubActionBindings } from "@ui-intelligence/renderers";
@@ -10,6 +10,42 @@ import { RulesTab } from "./RulesTab.js";
 import { appRendererMap } from "../kernel.js";
 
 type Tab = "select" | "candidates" | "batch" | "page" | "rules" | "history";
+
+/** References staged by the user (history observations, grounded screenshots). */
+type StagedReference = Extract<DesignReference, { kind: "history" }> | Extract<DesignReference, { kind: "image" }>;
+
+/** Candidate as returned by GET /v1/projects/:p/proposals/:id (protocol shape). */
+type ApiCandidateDto = {
+  candidateId: string;
+  presentation: { type: string; properties: Record<string, JsonValue>; dataBinding?: string; actions?: string[] };
+  origin?: { kind?: LocalCandidate["originKind"] } | null;
+  validation: ValidationReport;
+  summary?: string;
+};
+
+function sleepProposals(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let cachedAppBuildId: string | null = null;
+
+/** Real build id from the public runtime manifest; dev fallback when offline. */
+async function resolveAppBuildId(base: string): Promise<string> {
+  if (cachedAppBuildId) return cachedAppBuildId;
+  try {
+    const res = await fetch(`${base}/.ui-intelligence/manifest.json`);
+    if (res.ok) {
+      const manifest = (await res.json()) as { buildId?: unknown };
+      if (typeof manifest.buildId === "string" && manifest.buildId.length > 0) {
+        cachedAppBuildId = manifest.buildId;
+        return manifest.buildId;
+      }
+    }
+  } catch {
+    // offline: fall through to the dev identifier
+  }
+  return "dev-local";
+}
 
 /**
  * End-user editor: select a boundary (click), inspect alternatives, preview
@@ -30,6 +66,8 @@ export function Editor() {
   const [status, setStatus] = useState<string | null>(null);
   const [lastApplicationId, setLastApplicationId] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ captureId: string; evidenceLabel: string; commitSha: string; capturedAt: string; summary: string } | string> | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [references, setReferences] = useState<StagedReference[]>([]);
 
   // Selection mode: intercept clicks at capture phase; never trigger app actions.
   useEffect(() => {
@@ -83,22 +121,122 @@ export function Editor() {
     };
   }, []);
 
+  /**
+   * Real generation path: POST /v1/projects/reference-app/proposals with the
+   * user instruction, staged references, and the selected instance as an
+   * entity-scope target; poll until terminal. When the API is unreachable
+   * (offline dev, tests) fall back to the local generator — candidates are
+   * then labeled "offline · local" so the producing path is always visible.
+   */
   async function generateFor(instance: RuntimeInstanceInfo) {
     setGenerating(true);
     setStatus(null);
     try {
-      const result = await generator.candidatesFor(instance, "", [], 4);
-      setCandidates(result);
-      if (result.length === 0) setStatus("No valid candidates for this target's contract.");
+      try {
+        const apiCandidates = await proposeViaApi(instance);
+        setCandidates(apiCandidates.map((c) => adaptApiCandidate(c, instance)));
+        if (apiCandidates.length === 0) setStatus("No valid candidates for this target's contract.");
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`API proposals unavailable (${message}) — showing offline local candidates.`);
+      }
+      const refs = references.map((r) =>
+        r.kind === "history"
+          ? { kind: "history" as const, summary: `history capture ${r.captureId}` }
+          : { kind: "image" as const, summary: `image artifact ${r.artifactId}` }
+      );
+      const result = await generator.candidatesFor(instance, instruction, refs, 4);
+      setCandidates(result.map((c) => ({ ...c, offline: true, summary: `offline · local — ${c.summary}` })));
     } finally {
       setGenerating(false);
     }
   }
 
+  /** POST the proposal and poll it to a terminal state; throws when unavailable. */
+  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+    const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
+    // Same-origin /v1 goes through the dev-server proxy; an absolute
+    // VITE_API_BASE overrides it (tests, custom deployments).
+    const base = apiBaseUrl ?? "";
+    const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
+    const request = {
+      requestId: `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      operation: "propose_change" as const,
+      target: {
+        kind: "selection" as const,
+        entityId: instance.contract.entityKey,
+        runtimeInstanceId: instance.runtimeInstanceId,
+      },
+      references,
+      instruction,
+      appBuildId: await resolveAppBuildId(base),
+      requestedCandidateCount: 4,
+    };
+    const res = await fetch(
+      `${base}/v1/projects/reference-app/proposals?access_token=${encodeURIComponent(token)}`,
+      { method: "POST", headers, body: JSON.stringify({ request }) }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { proposalId } = (await res.json()) as { proposalId: string };
+
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await sleepProposals(500);
+      const poll = await fetch(
+        `${base}/v1/projects/reference-app/proposals/${encodeURIComponent(proposalId)}?access_token=${encodeURIComponent(token)}`,
+        { headers: { authorization: `Bearer ${token}` } }
+      );
+      if (!poll.ok) throw new Error(`HTTP ${poll.status}`);
+      const body = (await poll.json()) as {
+        status: string;
+        candidates?: ApiCandidateDto[];
+        failure?: { message?: string };
+      };
+      if (body.status === "ready") return body.candidates ?? [];
+      if (body.status === "failed") throw new Error(body.failure?.message ?? "proposal failed");
+    }
+    throw new Error("proposal polling timed out");
+  }
+
+  /** Map an API candidate onto the LocalCandidate shape used by the editor. */
+  function adaptApiCandidate(candidate: ApiCandidateDto, instance: RuntimeInstanceInfo): LocalCandidate {
+    const type = candidate.presentation.type;
+    const descriptor = kernel.renderers.get(type);
+    return {
+      candidateId: candidate.candidateId,
+      representation: type,
+      properties: candidate.presentation.properties,
+      originKind: candidate.origin?.kind ?? "generated",
+      summary: candidate.summary ?? `${type} candidate`,
+      validation: candidate.validation,
+      // The digest is the API's validation digest — accepted candidates keep
+      // their backend provenance.
+      digest: candidate.validation.specificationDigest ?? "",
+      requiredRendererVersions: { [descriptor?.id ?? type]: descriptor?.version ?? 1 },
+      contractVersion: instance.contract.contractVersion,
+      dataBindingId: candidate.presentation.dataBinding ?? instance.contract.dataBinding,
+      actionIds: candidate.presentation.actions ?? [...instance.contract.actions],
+    };
+  }
+
+  function stageReference(ref: StagedReference) {
+    setReferences((refs) => {
+      const key = JSON.stringify(ref);
+      return refs.some((r) => JSON.stringify(r) === key) ? refs : [...refs, ref];
+    });
+  }
+
   async function acceptCandidate(candidate: LocalCandidate) {
     if (!selected) return;
     const scopeKey = selected.contract.entityKey + (instanceKeyOf(selected) ? `#${instanceKeyOf(selected)}` : "");
-    const readSet = await kernel.currentReadSet(selected.contract.entityKey, 1);
+    // Ground the read set on the revision the live view currently displays,
+    // so an apply built on a stale view is rejected as a conflict instead of
+    // overwriting a newer revision.
+    const readSet = await kernel.currentReadSet(
+      selected.contract.entityKey,
+      1,
+      preferences.active.get(scopeKey)?.revision ?? 0
+    );
     const result = await preferences.apply(
       scopeKey,
       selected.contract.entityKey,
@@ -173,7 +311,11 @@ export function Editor() {
         entityKey: contract.entityKey,
         candidate,
         switcher: switcherFor(instance),
-        readSet: await kernel.currentReadSet(contract.entityKey, 1),
+        readSet: await kernel.currentReadSet(
+          contract.entityKey,
+          1,
+          preferences.active.get(scopeKey)?.revision ?? 0
+        ),
       });
     }
     if (participants.length === 0) {
@@ -227,7 +369,11 @@ export function Editor() {
         importState: () => {},
         commit: async () => {},
       },
-      await kernel.currentReadSet(pageKey, 1)
+      await kernel.currentReadSet(
+        pageKey,
+        1,
+        preferences.active.get(`page:${pageKey}`)?.revision ?? 0
+      )
     );
     if (result.status === "active" && result.applicationId) {
       setLastApplicationId(result.applicationId);
@@ -285,6 +431,9 @@ export function Editor() {
       });
       if (!putRes.ok) throw new Error(`HTTP ${putRes.status}`);
       const { artifactId } = (await putRes.json()) as { artifactId: string };
+      // Stage the grounded artifact as an image reference for the next
+      // generation (shows up as a chip near the Generate button).
+      stageReference({ kind: "image", artifactId });
       const resolveRes = await fetch(`${base}/v1/projects/reference-app/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -307,13 +456,23 @@ export function Editor() {
     }
   }
 
+  // --- Device sync (R2 stream B) ---
+  async function syncDevices() {
+    setStatus("Syncing devices…");
+    const result = await preferences.syncNow();
+    setStatus(
+      result.ok
+        ? `Synced ${result.synced} / conflicts ${result.conflicts}`
+        : `Sync failed: ${result.error}`
+    );
+  }
+
   function exportSpec() {
     const accepted = previewCandidate ?? candidates[0];
     if (!accepted) {
       setStatus("Nothing accepted yet to export.");
       return;
-    }
-    const spec = {
+    }    const spec = {
       format: "ui-intelligence/specification@1",
       target: { entityKey: selected?.contract.entityKey, scope: "entity" },
       presentation: { type: accepted.representation, properties: accepted.properties },
@@ -376,14 +535,40 @@ export function Editor() {
               {!selected && <p className="muted small">Select a region first (Select tab).</p>}
               {selected && (
                 <>
+                  <input
+                    className="instruction-input"
+                    data-testid="instruction-input"
+                    placeholder="Describe the change (optional)"
+                    value={instruction}
+                    onChange={(e) => setInstruction(e.target.value)}
+                  />
+                  {references.length > 0 && (
+                    <div className="reference-chips" data-testid="reference-chips">
+                      {references.map((r, i) => (
+                        <span key={`${r.kind}-${i}`} className="reference-chip" data-testid="reference-chip">
+                          {r.kind === "history" ? `history · ${r.captureId.slice(-8)}` : `image · ${r.artifactId.slice(-8)}`}
+                          <button
+                            className="icon-btn"
+                            aria-label="Remove reference"
+                            data-testid="remove-reference"
+                            onClick={() => setReferences((refs) => refs.filter((_, j) => j !== i))}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <button className="btn primary" onClick={() => void generateFor(selected)} disabled={generating} data-testid="generate">
                     {generating ? "Generating…" : "Show alternatives"}
                   </button>
+                  {generating && <div className="muted small" data-testid="generate-spinner">Waiting for the proposal service…</div>}
                   <ul className="candidate-list">
                     {candidates.map((c) => (
                       <li key={c.candidateId} className="candidate" data-testid="candidate">
                         <div className="candidate-head">
                           <strong>{c.representation}</strong>
+                          {c.offline && <span className="origin origin-offline" data-testid="offline-badge">offline · local</span>}
                           <span className={`origin origin-${c.originKind}`}>{c.originKind.replace("_", " ")}</span>
                         </div>
                         <div className="muted small">{c.summary}</div>
@@ -421,6 +606,10 @@ export function Editor() {
           {tab === "page" && (
             <div>
               <p className="muted small">Page composition for <strong>{pageKey}</strong>. Locked and required slots are preserved.</p>
+              <p className="muted small" data-testid="page-scope-note">
+                Local layout suggestions — API page-scope generation not configured (the proposal API supports
+                entity-scope selection targets only).
+              </p>
               <button className="btn primary" onClick={() => void generateLayouts()} data-testid="generate-layouts">Show layouts</button>
               <ul className="candidate-list">
                 {layoutCandidates.map((l, i) => (
@@ -464,6 +653,13 @@ export function Editor() {
                         <span className="mono small">{h.commitSha.slice(0, 8)}</span>
                         <span className="muted small">{new Date(h.capturedAt).toLocaleDateString()}</span>
                         <div className="muted small">{h.summary}</div>
+                        <button
+                          className="btn small"
+                          data-testid="use-as-reference"
+                          onClick={() => stageReference({ kind: "history", captureId: h.captureId })}
+                        >
+                          Use as reference
+                        </button>
                       </li>
                     )
                   )}
@@ -474,6 +670,7 @@ export function Editor() {
         </div>
         <footer className="editor-footer">
           <button className="btn small" onClick={() => void undoLast()} data-testid="undo">Undo</button>
+          <button className="btn small" onClick={() => void syncDevices()} data-testid="sync-now">Sync devices</button>
           <button className="btn small" onClick={() => void exportSpec()}>Export spec</button>
           {status && <div className="editor-status" data-testid="editor-status">{status}</div>}
           <div className="muted small">

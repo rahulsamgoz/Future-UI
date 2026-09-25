@@ -163,6 +163,12 @@ export class IdbPreferenceStore implements PreferenceStore {
     });
   }
 
+  async listSpecifications(): Promise<SpecificationRecord[]> {
+    return this.#transaction(["specifications"], "readonly", async (stores) => {
+      return (await wrap(stores.specifications.getAll())) as SpecificationRecord[];
+    });
+  }
+
   async beginApplication(
     applicationId: string,
     participants: ApplicationParticipantInput[],
@@ -201,6 +207,7 @@ export class IdbPreferenceStore implements PreferenceStore {
             previousRevision: p.previousRevision,
             previousDigest: p.previousDigest,
             proposedDigest: p.proposedDigest,
+            ...(p.contractVersion !== undefined ? { contractVersion: p.contractVersion } : {}),
           })),
         };
         stores.applications.put(application);
@@ -268,9 +275,9 @@ export class IdbPreferenceStore implements PreferenceStore {
             key: { ...participant.key },
             activeSpecificationDigest: participant.proposedDigest,
             revision,
-            contractVersion:
-              current[i]?.contractVersion ??
-              0,
+            // The contract identity of the APPLIED specification wins; fall
+            // back to the previous record's value (then 0).
+            contractVersion: participant.contractVersion ?? current[i]?.contractVersion ?? 0,
             updatedAt: nowIso(),
           });
         });

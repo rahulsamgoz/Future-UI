@@ -117,13 +117,18 @@ const CANDIDATE_CAP = 200;
  * capture's screenshot artifact, bounded to the latest capture per scenario
  * per anchor and capped. When resolution is weak the caller gets a shortlist
  * or an honest no_match — never a guessed entity.
+ *
+ * Async (audit fix, finding 4): artifact bytes come from the awaited object
+ * store. Screenshot bytes for all candidates are prefetched into `prefetched`
+ * so the sync `loadScreenshot` callback consumed by the pure
+ * groundScreenshot helper (packages/indexing) is always a cache hit.
  */
-function resolveScreenshotTarget(
+async function resolveScreenshotTarget(
   db: Db,
   projectId: string,
   query: Extract<TargetQuery, { kind: "screenshot" }>,
   deps: ScreenshotGroundingDeps
-): ResolveResponse {
+): Promise<ResolveResponse> {
   // Ownership check: an artifact from another project (or a missing one) is a
   // 404 so cross-project grounding never leaks existence.
   const artifact = getArtifact(db, projectId, query.artifactId);
@@ -132,7 +137,7 @@ function resolveScreenshotTarget(
   }
 
   let crop: DecodedImage | null = null;
-  const cropBytes = deps.store.get(artifact.digest as string);
+  const cropBytes = await deps.store.get(artifact.digest as string);
   if (cropBytes) {
     try {
       crop = decodePng(cropBytes);
@@ -205,10 +210,19 @@ function resolveScreenshotTarget(
     if (candidates.length >= CANDIDATE_CAP) break;
   }
 
+  // Prefetch every candidate screenshot through the async store (deduped by
+  // digest), then serve the pure matcher from the prefetched bytes.
+  const prefetched = new Map<string, Uint8Array | null>();
+  for (const digest of new Set(candidates.map((c) => c.screenshotDigest))) {
+    if (!prefetched.has(digest)) {
+      prefetched.set(digest, await deps.store.get(digest));
+    }
+  }
+
   const results = groundScreenshot(
     crop,
     candidates,
-    (digest) => deps.store.get(digest),
+    (digest) => prefetched.get(digest) ?? null,
     deps.screenshotCache
   );
   const top = results[0];
@@ -240,13 +254,13 @@ function resolveScreenshotTarget(
   return { status: "no_match", reason: "no visually similar region found in authorized captures" };
 }
 
-export function resolveTarget(
+export async function resolveTarget(
   db: Db,
   projectId: string,
   cache: LexicalIndexCache,
   query: TargetQuery,
   grounding?: ScreenshotGroundingDeps
-): ResolveResponse {
+): Promise<ResolveResponse> {
   if (query.kind === "selection") {
     const entity = getEntityById(db, projectId, query.entityId);
     if (!entity) {
@@ -263,7 +277,7 @@ export function resolveTarget(
         reason: "screenshot grounding requires artifact analysis not configured in dev profile",
       };
     }
-    return resolveScreenshotTarget(db, projectId, query, grounding);
+    return await resolveScreenshotTarget(db, projectId, query, grounding);
   }
 
   const index = cache.get(projectId);

@@ -65,6 +65,8 @@ export type LocalCandidate = {
   contractVersion: number;
   dataBindingId: string;
   actionIds: string[];
+  /** True when the candidate came from the offline local fallback, not the API. */
+  offline?: boolean;
 };
 
 /**

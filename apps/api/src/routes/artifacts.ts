@@ -2,12 +2,22 @@
  * Artifact upload slots, byte uploads, and raw reads (spec section 12).
  * Slots expire in 15 minutes and accept only image/png and application/json
  * up to 20 MB. Completion verifies the digest before an artifacts row exists.
+ *
+ * Authorization (audit fix, finding 1): the artifact and slot routes carry no
+ * :p param, so they enforce membership HERE against the project resolved from
+ * the artifact/slot row — a project hint never substitutes for membership.
+ * Metadata and raw bytes require viewer+; uploading bytes into a slot
+ * requires member+. Byte persistence is awaited before the artifact is
+ * marked ready (audit fix, finding 4): a storage failure returns 500 and
+ * leaves the slot open.
  */
 import { randomUUID } from "node:crypto";
 import { UiIntelligenceError } from "@ui-intelligence/protocol";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Db } from "../db.js";
 import { nowIso } from "../db.js";
+import { requireRole, type Role } from "../authz.js";
+import { sendError } from "../auth.js";
 import { ObjectStore } from "../objectstore.js";
 import { getArtifact, getUploadSlot } from "../store.js";
 
@@ -19,6 +29,26 @@ function kindForMediaType(mediaType: string): string {
   if (mediaType === "image/png") return "screenshot-png";
   if (mediaType === "application/json") return "manifest-json";
   return "blob";
+}
+
+/** Enforce per-user membership on a non-:p route; 403 + reply on failure. */
+function requireProjectRole(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  projectId: string,
+  minimum: Role
+): boolean {
+  const principal = request.principal;
+  if (!principal) {
+    sendError(reply, request.traceId, 401, "UNAUTHORIZED", "missing principal");
+    return false;
+  }
+  const check = requireRole(principal, projectId, minimum);
+  if (!check.ok) {
+    sendError(reply, request.traceId, 403, "FORBIDDEN", check.reason);
+    return false;
+  }
+  return true;
 }
 
 export type ArtifactDeps = {
@@ -69,6 +99,10 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     if (!slot) {
       throw new UiIntelligenceError("NOT_FOUND", `upload slot ${slotId} not found`, { httpStatus: 404 });
     }
+    // Slot uploads are writes against the slot's owning project.
+    if (!requireProjectRole(request, reply, slot.project_id as string, "member")) {
+      return reply as never;
+    }
     if (slot.status !== "open") {
       throw new UiIntelligenceError("STALE_REVISION", "upload slot already used", { httpStatus: 409 });
     }
@@ -85,11 +119,13 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
       });
     }
     // Digest verification happens inside ObjectStore.put (mismatch => 422).
-    store.put(slot.digest as string, body);
+    // The persisted promise is AWAITED (durable publication): a storage
+    // failure propagates as a 500 and the slot stays open for a retry.
+    await store.put(slot.digest as string, body);
 
     // If the client reserved an artifact id at slot-allocation time (its
     // manifest references that id), mark it ready. Otherwise allocate a new
-    // one. Bytes were digest-verified by store.put above.
+    // one. Bytes were digest-verified and durably persisted above.
     const reserved = db
       .prepare("SELECT id FROM artifacts WHERE project_id = ? AND digest = ? AND visibility = 'pending'")
       .get(slot.project_id, slot.digest) as { id: string } | undefined;
@@ -107,9 +143,9 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     return reply.code(200).send({ artifactId, digest: slot.digest });
   });
 
-  // Visibility "project": the bearer token is already verified by the auth
-  // hook; a projectId hint that does not match the owning project yields 404
-  // so cross-project reads never leak existence.
+  // Visibility "project": the caller needs at least viewer membership in the
+  // artifact's owning project; a projectId hint that does not match the
+  // owning project yields 404 so cross-project reads never leak existence.
   app.get("/v1/artifacts/:id/raw", async (request, reply) => {
     const artifactId = (request.params as { id: string }).id;
     const query = request.query as { projectId?: string };
@@ -117,9 +153,9 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     // Project ownership is verified from the artifact ROW — the projectId
     // query param must be present AND match the owning project (accepting
     // the stored project id OR its name, consistent with the :p
-    // canonicalization used by every other route). (Dev profile: a single
-    // operator token authenticates the caller; this check keeps projects
-    // isolated from each other's artifact bytes.)
+    // canonicalization used by every other route). Membership in that
+    // project is then enforced from the ROW as well: the hint authorizes
+    // nothing by itself.
     let projectMatch = false;
     if (artifact && query.projectId) {
       const project = db
@@ -130,7 +166,10 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     if (!artifact || !projectMatch) {
       throw new UiIntelligenceError("NOT_FOUND", `artifact ${artifactId} not found`, { httpStatus: 404 });
     }
-    const bytes = store.get(artifact.digest as string);
+    if (!requireProjectRole(request, reply, artifact.project_id as string, "viewer")) {
+      return reply as never;
+    }
+    const bytes = await store.get(artifact.digest as string);
     if (!bytes) {
       throw new UiIntelligenceError("NOT_FOUND", "artifact bytes missing from object store", { httpStatus: 404 });
     }
@@ -139,11 +178,15 @@ export async function artifactRoutes(app: FastifyInstance, deps: ArtifactDeps): 
     return reply.send(bytes);
   });
 
-  app.get("/v1/artifacts/:id", async (request) => {
+  app.get("/v1/artifacts/:id", async (request, reply) => {
     const artifactId = (request.params as { id: string }).id;
     const artifact = getArtifact(db, null, artifactId);
     if (!artifact) {
       throw new UiIntelligenceError("NOT_FOUND", `artifact ${artifactId} not found`, { httpStatus: 404 });
+    }
+    // Metadata reads are authorized from the artifact's owning project row.
+    if (!requireProjectRole(request, reply, artifact.project_id as string, "viewer")) {
+      return reply as never;
     }
     return {
       artifactId: artifact.id,

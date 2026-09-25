@@ -56,6 +56,8 @@ export function App() {
         kernel.registerEntity(contract, { data: nullBinding, actions: {} });
       }
       preferences = new PreferenceService();
+      // Device sync target (may be null = same-origin dev proxy).
+      preferences.apiBaseUrl = (import.meta.env.VITE_API_BASE as string | undefined) ?? null;
       const contractVersions = new Map(allEntityContracts.map((c) => [c.entityKey, c.contractVersion] as const));
       contractVersions.set("page:catalog", 1);
       contractVersions.set("page:account", 1);

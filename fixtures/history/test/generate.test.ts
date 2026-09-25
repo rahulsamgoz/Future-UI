@@ -80,13 +80,14 @@ describe("history fixture generator", () => {
           expect(found, `commit ${entry.commit} (${entry.message}) missing anchor ${anchor}`).toContain(anchor);
         }
       }
-      // Commit 12 source contains the intentional syntax error marker.
+      // Commit 12 source contains the intentional failure marker and throws on load.
       const sha12 = shas[11];
-      const chooser = execFileSync("sh", ["-c", `git show "$1":src/features/catalog/ProductChooser.tsx`, "git", sha12], {
+      const appJs = execFileSync("sh", ["-c", `git show "$1":app.js`, "git", sha12], {
         cwd: dir,
         encoding: "utf8",
       });
-      expect(chooser).toContain("INTENTIONALLY_UNBUILDABLE");
+      expect(appJs).toContain("INTENTIONALLY_UNBUILDABLE");
+      expect(appJs).toContain('throw new Error("intentionally unbuildable")');
     } finally {
       rm(dir, { recursive: true, force: true });
     }

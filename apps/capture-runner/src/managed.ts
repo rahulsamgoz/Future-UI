@@ -3,14 +3,23 @@
  * process works against the runner-manager (apps/runner-manager) instead of
  * the capture API — it registers, claims queued runs, heartbeats every 10s,
  * executes the run's scenarios against APP_URL with the real capture path,
- * and completes with per-scenario results. The claim/complete protocol here
- * is intentionally duplicated from the manager package (no cross-app
- * imports); the executor uses @ui-intelligence/capture directly.
+ * DURABLY PUBLISHES each capture to the history API (CaptureUploader +
+ * publication verification — audit fix: managed executors no longer report
+ * capture ids without uploading artifacts or ingesting), and completes with
+ * per-scenario results. The claim/complete protocol here is intentionally
+ * duplicated from the manager package (no cross-app imports); the executor
+ * uses @ui-intelligence/capture directly.
  */
 import { digestOf } from "@ui-intelligence/protocol";
 import type { CaptureEnvironment } from "@ui-intelligence/protocol";
-import { ScenarioRunner, standardScenarios } from "@ui-intelligence/capture";
-import type { RedactionPolicy } from "@ui-intelligence/capture";
+import {
+  CaptureUploader,
+  historyApiFromEnv,
+  publishCapture,
+  ScenarioRunner,
+  standardScenarios,
+} from "@ui-intelligence/capture";
+import type { RedactionPolicy, UploadApi } from "@ui-intelligence/capture";
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
@@ -18,6 +27,12 @@ export type ManagedWorkerDeps = {
   managerUrl: string;
   token: string;
   appUrl: string;
+  /**
+   * History API for durable publication (audit finding: managed executors must
+   * not just report capture ids — they must publish them). Defaults to the
+   * HISTORY_API_URL / HISTORY_API_TOKEN / HISTORY_API_PROJECT env vars.
+   */
+  historyApi?: UploadApi;
   /** Injected for tests; defaults to the real capture path. */
   executeScenarios?: (scenarios: string[], input: { runId: string; projectId: string; repoUrl: string; commitSha: string; appUrl: string }) => Promise<{ results: ScenarioResult[] }>;
   pollMs?: number;
@@ -30,16 +45,27 @@ export type ScenarioResult = {
   scenarioId: string;
   status: "captured" | "failed";
   captureId?: string;
+  artifactId?: string;
   error?: string;
 };
 
 export async function executeRunScenarios(
   scenarios: string[],
-  input: { runId: string; projectId: string; repoUrl: string; commitSha: string; appUrl: string }
+  input: { runId: string; projectId: string; repoUrl: string; commitSha: string; appUrl: string; historyApi?: UploadApi },
+  deps?: {
+    uploader?: Pick<InstanceType<typeof CaptureUploader>, "upload">;
+    runner?: Pick<ScenarioRunner, "execute">;
+    fetch?: typeof fetch;
+  }
 ): Promise<{ results: ScenarioResult[] }> {
   const all = standardScenarios();
+  // Durable publication target (audit finding 2): without a history API the
+  // capture cannot be published, so the scenario is reported FAILED — never
+  // "captured" on an unpublished manifest.
+  const api = input.historyApi ?? historyApiFromEnv();
   const redactionPolicy: RedactionPolicy = { version: "1", masks: [] };
-  const runner = new ScenarioRunner({ baseUrl: input.appUrl, adapterVersion: "unknown", redactionPolicy });
+  const runner =
+    deps?.runner ?? new ScenarioRunner({ baseUrl: input.appUrl, adapterVersion: "unknown", redactionPolicy });
   const environment: CaptureEnvironment = {
     runnerImageDigest: "local",
     browserRevision: "bundled-playwright",
@@ -56,13 +82,32 @@ export async function executeRunScenarios(
       continue;
     }
     try {
-      const { manifest } = await runner.execute(recipe, {
+      const { manifest, screenshotBytes } = await runner.execute(recipe, {
         projectId: input.projectId,
         commitSha: input.commitSha,
         buildArtifactDigest: "runner-managed",
         environment,
       });
-      results.push({ scenarioId, status: "captured", captureId: manifest.captureId });
+      if (!api) {
+        results.push({
+          scenarioId,
+          status: "failed",
+          error: "history API not configured (HISTORY_API_URL): capture executed but NOT durably published",
+        });
+        continue;
+      }
+      const published = await publishCapture({
+        manifest,
+        screenshotBytes,
+        api,
+        uploader: deps?.uploader,
+        fetch: deps?.fetch,
+        // Spec section 11: equivalent work is deduplicated — a re-capture of
+        // the same (commit, scenario, build digest) resolves to the already
+        // published, verified capture instead of failing.
+        dedupe: { commitSha: input.commitSha, scenarioId: recipe.id, buildArtifactDigest: "runner-managed" },
+      });
+      results.push({ scenarioId, status: "captured", captureId: published.captureId, artifactId: published.artifactId });
     } catch (error) {
       results.push({ scenarioId, status: "failed", error: (error as Error).message });
     }
@@ -127,6 +172,7 @@ export async function runManagedWorker(deps: ManagedWorkerDeps): Promise<void> {
           repoUrl: run.repoUrl,
           commitSha: run.commitSha,
           appUrl: deps.appUrl,
+          historyApi: deps.historyApi,
         });
         await managerFetch(deps.managerUrl, deps.token, "POST", `/v1/runs/${runId}/complete`, {
           workerId,

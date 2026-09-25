@@ -6,8 +6,13 @@
  */
 import { digestOf } from "@ui-intelligence/protocol";
 import type { CaptureEnvironment } from "@ui-intelligence/protocol";
-import { ScenarioRunner, standardScenarios } from "@ui-intelligence/capture";
-import type { RedactionPolicy } from "@ui-intelligence/capture";
+import {
+  historyApiFromEnv,
+  publishCapture,
+  ScenarioRunner,
+  standardScenarios,
+} from "@ui-intelligence/capture";
+import type { RedactionPolicy, UploadApi } from "@ui-intelligence/capture";
 import type { ScenarioResult } from "./store.js";
 
 export type RunExecutionInput = {
@@ -18,6 +23,12 @@ export type RunExecutionInput = {
   scenarios: string[];
   /** Base URL of the app under capture (env APP_URL for the default executor). */
   appUrl: string;
+  /**
+   * History API for durable publication (audit finding: the manager path must
+   * publish captures, not just report ids). Defaults to the HISTORY_API_URL /
+   * HISTORY_API_TOKEN / HISTORY_API_PROJECT env vars.
+   */
+  historyApi?: UploadApi;
 };
 
 export type RunExecutionResult = { results: ScenarioResult[] };
@@ -37,11 +48,15 @@ export function defaultEnvironment(): CaptureEnvironment {
 
 /**
  * Real executor: resolves each scenario id against the standard recipes and
- * captures it against input.appUrl. A failing scenario is recorded as a
- * per-scenario failure; it never aborts the remaining scenarios.
+ * captures it against input.appUrl. Every capture is then durably published
+ * to the history API via CaptureUploader and VERIFIED (capture retrievable,
+ * occurrences > 0, artifact bytes readable) before the scenario is reported
+ * as captured with the REAL captureId + artifactId. A failing scenario is
+ * recorded as a per-scenario failure; it never aborts the remaining scenarios.
  */
 export const defaultExecutor: RunExecutor = async (input) => {
   const all = standardScenarios();
+  const api = input.historyApi ?? historyApiFromEnv();
   const redactionPolicy: RedactionPolicy = { version: "1", masks: [] };
   const runner = new ScenarioRunner({
     baseUrl: input.appUrl,
@@ -60,13 +75,27 @@ export const defaultExecutor: RunExecutor = async (input) => {
       continue;
     }
     try {
-      const { manifest } = await runner.execute(recipe, {
+      const { manifest, screenshotBytes } = await runner.execute(recipe, {
         projectId: input.projectId,
         commitSha: input.commitSha,
         buildArtifactDigest: "runner-managed",
         environment,
       });
-      results.push({ scenarioId, status: "captured", captureId: manifest.captureId });
+      if (!api) {
+        results.push({
+          scenarioId,
+          status: "failed",
+          error: "history API not configured (HISTORY_API_URL): capture executed but NOT durably published",
+        });
+        continue;
+      }
+      const published = await publishCapture({
+        manifest,
+        screenshotBytes,
+        api,
+        dedupe: { commitSha: input.commitSha, scenarioId: recipe.id, buildArtifactDigest: "runner-managed" },
+      });
+      results.push({ scenarioId, status: "captured", captureId: published.captureId, artifactId: published.artifactId });
     } catch (error) {
       results.push({ scenarioId, status: "failed", error: (error as Error).message });
     }

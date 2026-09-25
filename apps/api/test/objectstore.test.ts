@@ -1,7 +1,10 @@
 /**
- * Storage driver tests (R2 stream G). FsStorageDriver preserves the R1
- * digest-sharded layout; S3StorageDriver is contract-tested with an injected
- * fake client asserting commands, bucket, and key prefixing.
+ * Storage driver tests (R2 stream G + audit fix 4). FsStorageDriver preserves
+ * the R1 digest-sharded layout; S3StorageDriver is contract-tested with an
+ * injected fake SDK transport and now performs REAL Get/Head/Delete round
+ * trips — bytes written by one driver instance are read by another (no
+ * per-process write-through cache), deletes propagate, and a failed put
+ * rejects.
  */
 import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,71 +13,102 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
-import { FsStorageDriver, ObjectStore, S3StorageDriver, createStorageDriver } from "../src/objectstore.js";
+import {
+  FsStorageDriver,
+  ObjectStore,
+  S3StorageDriver,
+  createStorageDriver,
+  type S3LikeClient,
+} from "../src/objectstore.js";
 
 describe("FsStorageDriver + ObjectStore", () => {
-  it("keeps the R1 digest-sharded layout and digest verification", () => {
+  it("keeps the R1 digest-sharded layout and digest verification", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ui-intel-fsdrv-"));
     const store = new ObjectStore(dir);
     const bytes = Buffer.from("fs-driver-bytes");
     const digest = ObjectStore.sha256(bytes);
 
-    const result = store.put(digest, bytes);
+    const result = await store.put(digest, bytes);
     expect(result.key).toBe(`${digest.slice(0, 2)}/${digest}`);
     // Layout: <root>/<xx>/<digest>
     expect(readFileSync(join(dir, digest.slice(0, 2), digest))).toEqual(bytes);
 
-    expect(store.get(digest)).toEqual(bytes);
-    expect(store.get("f".repeat(64))).toBeNull();
-    expect(store.exists(digest)).toBe(true);
+    expect(await store.get(digest)).toEqual(bytes);
+    expect(await store.get("f".repeat(64))).toBeNull();
+    expect(await store.exists(digest)).toBe(true);
 
-    expect(() => store.put("f".repeat(64), bytes)).toThrowError(/digest mismatch/);
+    await expect(store.put("f".repeat(64), bytes)).rejects.toThrowError(/digest mismatch/);
 
-    store.delete(digest);
-    expect(store.exists(digest)).toBe(false);
-    expect(store.get(digest)).toBeNull();
-    store.delete(digest); // idempotent
+    await store.delete(digest);
+    expect(await store.exists(digest)).toBe(false);
+    expect(await store.get(digest)).toBeNull();
+    await store.delete(digest); // idempotent
   });
 });
 
 type SentCommand = { name: string; input: Record<string, unknown> };
 
-function fakeS3Client() {
-  const sent: SentCommand[] = [];
-  const store = new Map<string, Uint8Array>();
-  return {
-    sent,
-    store,
-    send: async (command: { constructor: Function; input: Record<string, unknown> }) => {
-      sent.push({ name: command.constructor.name, input: command.input });
-      if (command.constructor.name === "PutObjectCommand") {
-        store.set(command.input.Key as string, command.input.Body as Uint8Array);
-      }
-      return {};
-    },
-  };
+function absentError(name: string): Error {
+  return Object.assign(new Error(name), { name, $metadata: { httpStatusCode: 404 } });
 }
 
-describe("S3StorageDriver (injected fake client)", () => {
+/**
+ * Fake in-memory S3 "remote" shared between any number of driver instances —
+ * models a real bucket: state lives in the remote, not in the driver.
+ */
+function fakeS3Remote(options?: { failPuts?: boolean }) {
+  const sent: SentCommand[] = [];
+  const remote = new Map<string, Uint8Array>();
+  const makeClient = (): S3LikeClient => ({
+    send: async (command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand | HeadObjectCommand) => {
+      const name = command.constructor.name;
+      const input = command.input as Record<string, unknown>;
+      sent.push({ name, input });
+      if (name === "PutObjectCommand") {
+        if (options?.failPuts) throw new Error("simulated PutObject failure");
+        remote.set(input.Key as string, input.Body as Uint8Array);
+        return {};
+      }
+      if (name === "GetObjectCommand") {
+        const body = remote.get(input.Key as string);
+        if (body === undefined) throw absentError("NoSuchKey");
+        // SDK-shaped Body: bufferable via transformToByteArray.
+        return { Body: { transformToByteArray: async () => new Uint8Array(body) } };
+      }
+      if (name === "HeadObjectCommand") {
+        if (!remote.has(input.Key as string)) throw absentError("NotFound");
+        return {};
+      }
+      if (name === "DeleteObjectCommand") {
+        remote.delete(input.Key as string);
+        return {};
+      }
+      throw new Error(`unexpected command ${name}`);
+    },
+  });
+  return { sent, remote, makeClient };
+}
+
+describe("S3StorageDriver (injected fake transport)", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {
     while (cleanups.length) cleanups.pop()!();
   });
 
-  it("issues Put/Get/Delete/Head commands with bucket and prefixed keys", async () => {
-    const fake = fakeS3Client();
+  it("issues real Put/Get/Delete/Head commands with bucket and prefixed keys", async () => {
+    const fake = fakeS3Remote();
     const driver = new S3StorageDriver({
       bucket: "ui-intel-test-bucket",
       prefix: "ui-intel/proj_x/",
-      client: fake,
+      client: fake.makeClient(),
     });
 
     const bytes = new TextEncoder().encode("s3-driver-bytes");
     const putPromise = driver.put("ab/ab01", bytes);
-    // put() returns the upload promise.
     expect(putPromise).toBeInstanceOf(Promise);
     await putPromise;
 
@@ -82,37 +116,63 @@ describe("S3StorageDriver (injected fake client)", () => {
       name: "PutObjectCommand",
       input: { Bucket: "ui-intel-test-bucket", Key: "ui-intel/proj_x/ab/ab01" },
     });
-    expect(fake.store.get("ui-intel/proj_x/ab/ab01")).toEqual(bytes);
+    expect(fake.remote.get("ui-intel/proj_x/ab/ab01")).toEqual(bytes);
 
-    // get/exists are served from the write-through cache (sync seam).
-    expect(driver.get("ab/ab01")).toEqual(bytes);
-    expect(driver.exists("ab/ab01")).toBe(true);
-    expect(driver.exists("ab/ab02")).toBe(false);
-    expect(driver.get("ab/ab02")).toBeNull();
+    // get/exists hit the remote (GetObject/HeadObject), not a local cache.
+    expect(await driver.get("ab/ab01")).toEqual(bytes);
+    expect(await driver.exists("ab/ab01")).toBe(true);
+    expect(fake.sent.some((c) => c.name === "HeadObjectCommand")).toBe(true);
+    expect(await driver.exists("ab/ab02")).toBe(false);
+    expect(await driver.get("ab/ab02")).toBeNull();
 
-    driver.delete("ab/ab01");
-    expect(fake.sent[1]).toMatchObject({
-      name: "DeleteObjectCommand",
+    await driver.delete("ab/ab01");
+    expect(fake.sent.filter((c) => c.name === "DeleteObjectCommand")[0]).toMatchObject({
       input: { Bucket: "ui-intel-test-bucket", Key: "ui-intel/proj_x/ab/ab01" },
     });
-    expect(driver.exists("ab/ab01")).toBe(false);
-    expect(driver.get("ab/ab01")).toBeNull();
+    expect(await driver.exists("ab/ab01")).toBe(false);
+    expect(await driver.get("ab/ab01")).toBeNull();
+  });
+
+  it("is durable across driver instances: put via A, get/exists via B succeed (audit finding 4)", async () => {
+    // Two instances over ONE remote: the old write-through-cache driver
+    // returned null/false for cold keys here; the fixed driver reads the
+    // bucket.
+    const fake = fakeS3Remote();
+    const a = new S3StorageDriver({ bucket: "b", prefix: "p/", client: fake.makeClient() });
+    const b = new S3StorageDriver({ bucket: "b", prefix: "p/", client: fake.makeClient() });
+
+    const bytes = new TextEncoder().encode("cross-instance-bytes");
+    await a.put("cd/cd01", bytes);
+
+    expect(await b.get("cd/cd01")).toEqual(bytes);
+    expect(await b.exists("cd/cd01")).toBe(true);
+
+    // Delete via B removes the object from the remote: A no longer sees it.
+    await b.delete("cd/cd01");
+    expect(await a.get("cd/cd01")).toBeNull();
+    expect(await a.exists("cd/cd01")).toBe(false);
+  });
+
+  it("propagates failed PutObjectCommand errors", async () => {
+    const fake = fakeS3Remote({ failPuts: true });
+    const driver = new S3StorageDriver({ bucket: "b", client: fake.makeClient() });
+    await expect(driver.put("ee/ee01", new TextEncoder().encode("x"))).rejects.toThrowError(/simulated PutObject failure/);
   });
 
   it("works through ObjectStore with digest verification and key computation", async () => {
-    const fake = fakeS3Client();
-    const driver = new S3StorageDriver({ bucket: "b", prefix: "p/", client: fake });
+    const fake = fakeS3Remote();
+    const driver = new S3StorageDriver({ bucket: "b", prefix: "p/", client: fake.makeClient() });
     const store = new ObjectStore("/unused-fs-root", driver);
     const bytes = Buffer.from("s3-through-objectstore");
     const digest = ObjectStore.sha256(bytes);
 
-    const result = store.put(digest, bytes);
-    await result.persisted;
+    const result = await store.put(digest, bytes);
+    expect(result.key).toBe(`${digest.slice(0, 2)}/${digest}`);
     expect(fake.sent[0].input.Key).toBe(`p/${digest.slice(0, 2)}/${digest}`);
-    expect(store.get(digest)).toEqual(bytes);
-    expect(store.exists(digest)).toBe(true);
-    store.delete(digest);
-    expect(store.exists(digest)).toBe(false);
+    expect(await store.get(digest)).toEqual(bytes);
+    expect(await store.exists(digest)).toBe(true);
+    await store.delete(digest);
+    expect(await store.exists(digest)).toBe(false);
   });
 });
 
@@ -125,12 +185,12 @@ describe("createStorageDriver", () => {
   });
 
   it("selects s3 when a bucket is configured", () => {
-    const fake = fakeS3Client();
+    const fake = fakeS3Remote();
     const selection = createStorageDriver({
       driver: "s3",
       s3Bucket: "some-bucket",
       s3Prefix: "pre/",
-      s3Client: fake,
+      s3Client: fake.makeClient(),
       fsRoot: "/unused",
     });
     expect(selection.kind).toBe("s3");
@@ -154,12 +214,12 @@ describe("createStorageDriver", () => {
   });
 });
 
-// HeadObjectCommand is part of the driver's command surface for future
-// async read paths; assert it is importable/constructible to pin the SDK shape.
+// The command surface pins the SDK shape used by the driver.
 describe("s3 command surface", () => {
-  it("constructs a HeadObjectCommand with bucket+key", () => {
-    const command = new HeadObjectCommand({ Bucket: "b", Key: "k" });
-    expect(command.input.Bucket).toBe("b");
-    expect(command.input.Key).toBe("k");
+  it("constructs Get/Head/Delete/Put commands with bucket+key", () => {
+    expect(new HeadObjectCommand({ Bucket: "b", Key: "k" }).input).toMatchObject({ Bucket: "b", Key: "k" });
+    expect(new GetObjectCommand({ Bucket: "b", Key: "k" }).input).toMatchObject({ Bucket: "b", Key: "k" });
+    expect(new DeleteObjectCommand({ Bucket: "b", Key: "k" }).input).toMatchObject({ Bucket: "b", Key: "k" });
+    expect(new PutObjectCommand({ Bucket: "b", Key: "k", Body: new Uint8Array() }).input).toMatchObject({ Bucket: "b", Key: "k" });
   });
 });

@@ -30,7 +30,7 @@ export async function proposalRoutes(app: FastifyInstance, deps: ProposalDeps): 
     }
     const uiRequest = parsed.data;
 
-    const resolved = resolveTarget(db, projectId, indexCache, uiRequest.target, { store, screenshotCache });
+    const resolved = await resolveTarget(db, projectId, indexCache, uiRequest.target, { store, screenshotCache });
     if (resolved.status === "ambiguous") {
       throw new UiIntelligenceError("AMBIGUOUS_TARGET", "target is ambiguous; choose a candidate", {
         httpStatus: 422,

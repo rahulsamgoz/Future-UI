@@ -39,7 +39,13 @@ export type ProposedSpecificationEntry = {
  * finalization, so undo can detect that a participant has moved on. The
  * protocol ApplicationRecord is unchanged; this is a store-level extension.
  */
-export type StoredApplicationRecord = ApplicationRecord & {
+export type StoredApplicationParticipant = ApplicationRecord["participants"][number] & {
+  /** Contract version the proposed specification was validated against. */
+  contractVersion?: number;
+};
+
+export type StoredApplicationRecord = Omit<ApplicationRecord, "participants"> & {
+  participants: StoredApplicationParticipant[];
   postApplyRevisions?: Record<string, number>;
 };
 
@@ -89,6 +95,13 @@ export interface PreferenceStore {
   setPreference(record: PreferenceRecord): Promise<void>;
   getSpecification(digest: string): Promise<SpecificationRecord | null>;
   putSpecification(record: SpecificationRecord): Promise<void>;
+  /**
+   * Every stored specification record, including reserved bookkeeping
+   * records written under a reserved digest prefix (device-sync bases and
+   * retained drafts — see SyncManager). Used by the SyncManager to reload
+   * its persisted state after manager recreation.
+   */
+  listSpecifications(): Promise<SpecificationRecord[]>;
 
   /** One transaction: verify every participant's expected revision, write pending application. Throws PreferenceConflictError on mismatch. */
   beginApplication(

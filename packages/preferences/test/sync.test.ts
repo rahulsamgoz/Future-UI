@@ -223,12 +223,15 @@ describe("SyncManager", () => {
     expect(device2.drafts.get("entity:ui.primaryButton")?.digest).toBe("digestB2");
     expect(device2.drafts.size).toBe(1);
 
-    // Device 1 pulls the authoritative bundle: product chooser moves to
-    // revision 2 (device 2's spec); the button re-pushes as a no-op (equal
-    // revision, equal digest) and reports as accepted.
+    // Device 1 pulls the authoritative bundle: the product chooser moves to
+    // revision 2 (device 2's spec). Device 1's own chooser edit (digestA1)
+    // was dropped server-side by the higher revision, so it is retained as a
+    // draft — never silently overwritten (audit defect 3). The button
+    // re-pushes as a no-op (equal revision, equal digest) and reports as
+    // accepted.
     const result1 = await device1.syncNow();
     expect(result1.accepted).toEqual(["entity:ui.primaryButton"]);
-    expect(result1.retainedAsDraft).toEqual([]);
+    expect(result1.retainedAsDraft).toEqual(["entity:catalog.productChooser"]);
 
     const chooser1 = await store1.getPreference(entityKey("catalog.productChooser"));
     const chooser2 = await store2.getPreference(entityKey("catalog.productChooser"));
@@ -237,8 +240,123 @@ describe("SyncManager", () => {
     expect(chooser1?.revision).toBe(2);
     const button1 = await store1.getPreference(entityKey("ui.primaryButton"));
     expect(button1?.activeSpecificationDigest).toBe("digestB1");
-    // Device 1 never diverged, so it holds no drafts.
-    expect(device1.drafts.size).toBe(0);
+    // Device 1's dropped chooser edit survives as a recoverable draft.
+    expect(device1.drafts.get("entity:catalog.productChooser")?.digest).toBe("digestA1");
+    expect(device1.drafts.size).toBe(1);
+  });
+
+  it("retains the losing device's edit as a draft when the server's higher revision clobbers the local push (audit defect 3)", async () => {
+    const server = new FakeSyncServer();
+
+    // Device A: one edit (revision 1), then sync. The base map is still
+    // empty — A authored the content, the server merely echoed it back.
+    const storeA = new MemoryPreferenceStore();
+    const deviceA = new SyncManager(storeA, server.push("device-a"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-a",
+    });
+    await storeA.putSpecification(specification("digestA", "device-a"));
+    await storeA.setPreference(record("catalog.productChooser", "digestA", 1));
+    await deviceA.syncNow();
+
+    // Device B edits the SAME scope twice BEFORE pulling, then syncs. Its
+    // higher revision number is accepted by the server's merge and clobbers
+    // A's pushed edit.
+    const storeB = new MemoryPreferenceStore();
+    const deviceB = new SyncManager(storeB, server.push("device-b"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-b",
+    });
+    await storeB.putSpecification(specification("digestB1", "device-b-1"));
+    await storeB.setPreference(record("catalog.productChooser", "digestB1", 1));
+    await storeB.putSpecification(specification("digestB2", "device-b-2"));
+    await storeB.setPreference(record("catalog.productChooser", "digestB2", 2));
+    const resultB = await deviceB.syncNow();
+    expect(resultB.accepted).toEqual(["entity:catalog.productChooser"]);
+    expect(resultB.retainedAsDraft).toEqual([]);
+    expect(deviceB.drafts.size).toBe(0); // B's edit won; nothing to retain
+
+    // Device A syncs again: its push is ignored (server revision ahead) and
+    // the authoritative bundle carries B's content. A's edit must NOT be
+    // silently overwritten — the merge reports the conflict and the local
+    // specification is retained as a draft.
+    const resultA = await deviceA.syncNow();
+    expect(resultA.retainedAsDraft).toEqual(["entity:catalog.productChooser"]);
+
+    // Both devices converge on the server state...
+    const chooserA = await storeA.getPreference(entityKey("catalog.productChooser"));
+    const chooserB = await storeB.getPreference(entityKey("catalog.productChooser"));
+    expect(chooserA).toEqual(chooserB);
+    expect(chooserA?.revision).toBe(2);
+    expect(chooserA?.activeSpecificationDigest).toBe("digestB2");
+    // ...and the losing device keeps its edit as a recoverable draft.
+    expect(deviceA.drafts.get("entity:catalog.productChooser")?.digest).toBe("digestA");
+
+    // Drafts survive manager recreation (persisted under the reserved
+    // "draft:" digest prefix) together with the sync bases.
+    const deviceA2 = new SyncManager(storeA, server.push("device-a"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-a",
+    });
+    await deviceA2.restore();
+    expect(deviceA2.drafts.get("entity:catalog.productChooser")?.digest).toBe("digestA");
+    // Re-pulling the identical authoritative state is a no-op: no re-apply,
+    // no duplicate draft (the persisted base anchors the comparison).
+    const again = await deviceA2.applyAuthoritative(server.authoritativeBundle(PROFILE, PROJECT));
+    expect(again.applied).toEqual([]);
+    expect(again.retainedAsDraft).toEqual([]);
+    expect(deviceA2.drafts.size).toBe(1);
+  });
+
+  it("fast-forwards silently when the local record was adopted from the server and is unchanged", async () => {
+    const server = new FakeSyncServer();
+    const store1 = new MemoryPreferenceStore();
+    await seedDevice(store1, [
+      { record: record("catalog.productChooser", "digestA1", 1), spec: specification("digestA1", "device1") },
+    ]);
+    const device1 = new SyncManager(store1, server.push("device-1"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-1",
+    });
+    await device1.syncNow();
+
+    // Another device moves the server to revision 2.
+    const store2 = new MemoryPreferenceStore();
+    await seedDevice(store2, [
+      { record: record("catalog.productChooser", "digestA2", 2), spec: specification("digestA2", "device2") },
+    ]);
+    const device2 = new SyncManager(store2, server.push("device-2"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-2",
+    });
+    await device2.syncNow();
+
+    // A fresh device adopts the server state (base = revision 2), then pulls
+    // revision 3 without any local edit: a strict fast-forward — silent.
+    const store3 = new MemoryPreferenceStore();
+    const device3 = new SyncManager(store3, server.push("device-3"), {
+      profileId: PROFILE,
+      projectId: PROJECT,
+      deviceLabel: "device-3",
+    });
+    await device3.applyAuthoritative(server.authoritativeBundle(PROFILE, PROJECT));
+    expect(device3.drafts.size).toBe(0);
+
+    await store2.putSpecification(specification("digestA3", "device2-next"));
+    await store2.setPreference(record("catalog.productChooser", "digestA3", 3));
+    await device2.syncNow();
+
+    const result3 = await device3.syncNow();
+    expect(result3.retainedAsDraft).toEqual([]);
+    expect(device3.drafts.size).toBe(0);
+    const chooser3 = await store3.getPreference(entityKey("catalog.productChooser"));
+    expect(chooser3?.revision).toBe(3);
+    expect(chooser3?.activeSpecificationDigest).toBe("digestA3");
   });
 
   it("applies server records to an empty local store (fresh device pull)", async () => {

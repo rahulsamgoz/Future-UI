@@ -56,8 +56,27 @@ export async function projectRoutes(app: FastifyInstance, deps: { db: Db }): Pro
     return reply.code(201).send({ project: { id, name: body.name, repository: body.repository } });
   });
 
-  app.get("/v1/projects", async () => {
-    const projects = listProjects(db);
+  app.get("/v1/projects", async (request) => {
+    const principal = request.principal;
+    // Listing is membership-filtered (audit fix, finding 1): the operator
+    // sees every project; a user sees only projects they hold a membership in.
+    const rowToProject = (row: Record<string, unknown>) => ({
+      id: row.id as string,
+      name: row.name as string,
+      repository: row.repository as string,
+      policyRevision: row.policy_revision as number,
+      meta: row.meta_json ? (JSON.parse(row.meta_json as string) as Record<string, unknown>) : null,
+    });
+    const projects = principal?.operator
+      ? listProjects(db)
+      : (db
+          .prepare(
+            `SELECT p.* FROM projects p
+             JOIN project_members m ON m.project_id = p.id
+             WHERE m.user_id = ?
+             ORDER BY p.created_at`
+          )
+          .all(principal?.userId ?? "") as Array<Record<string, unknown>>).map(rowToProject);
     return {
       projects: projects.map((p) => ({
         id: p.id,

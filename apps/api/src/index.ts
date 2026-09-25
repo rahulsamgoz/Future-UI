@@ -9,6 +9,7 @@ export * from "./resolve.js";
 export { planHistory } from "./planner.js";
 export { seedDevData, REFERENCE_PROJECT_ID, DECLARED_SCENARIOS, buildReferenceRuntimeManifest } from "./seed.js";
 export * from "./processor.js";
+export { dbReferenceLoader, type ReferenceLoader } from "./references.js";
 export {
   artifactRoutes,
   captureRoutes,
