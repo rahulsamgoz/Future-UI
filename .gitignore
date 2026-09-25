@@ -19,3 +19,6 @@ infra/dev/model.env
 *.sqlite-wal
 data/
 infra/dev/logs/
+
+# Generated fixture corpus (regenerate with fixtures/history/generate.mjs)
+fixtures/history/repo/
