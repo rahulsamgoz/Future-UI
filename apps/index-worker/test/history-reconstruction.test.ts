@@ -311,4 +311,49 @@ describe("history_scan with fixtureRepo performs reconstruction", () => {
     expect(payload.result?.captured).toBe(1);
     db.close();
   });
+
+  it("plan-scoped accounting: existing captures outside the selected scenario set are not reported (closure-2 review)", async () => {
+    const db = freshDb();
+    const COMMIT = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    // The commit already has captures for TWO scenarios; the plan selects ONE.
+    db.prepare(
+      "INSERT INTO builds (id, project_id, commit_sha, artifact_digest, outcome, created_at) VALUES ('b', ?, ?, 'd', 'succeeded', ?)"
+    ).run(PROJECT, COMMIT, nowIso());
+    const insertCapture = db.prepare(
+      "INSERT INTO captures (id, project_id, build_id, scenario_id, commit_sha, evidence_label, manifest_json, manifest_digest, request_key, created_at) VALUES (?, ?, 'b', ?, ?, 'captured_at_build', '{}', 'd', ?, ?)"
+    );
+    insertCapture.run("cap_selected", PROJECT, "catalog-default-desktop", COMMIT, "k1", nowIso());
+    insertCapture.run("cap_unrelated", PROJECT, "catalog-empty-desktop", COMMIT, "k2", nowIso());
+    insertPlan(
+      db,
+      "plan_subset_accounting",
+      [COMMIT],
+      JSON.stringify({ fixtureRepo: "/tmp/fixture-corpus", scenarioIds: ["catalog-default-desktop"] }),
+    );
+    const reconstruct = vi.fn();
+    const worker = createWorker(db, {
+      workerId: "w-recon-accounting",
+      historyScan: {
+        fixtureRepo: "/tmp/fixture-corpus",
+        api: { baseUrl: "http://history-api.local", token: "test-token", projectId: PROJECT },
+        reconstruct: reconstruct as unknown as (args: { repoDir: string; commitSha: string; scenarios: string[] }) => Promise<unknown>,
+      },
+    });
+
+    const jobId = enqueueHistoryScan(db, "plan_subset_accounting");
+    expect(await worker.runOnce()).toBe(true);
+
+    // Nothing to reconstruct (the selected scenario is already captured)…
+    expect(reconstruct).not.toHaveBeenCalled();
+    const row = db.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId) as Record<string, unknown>;
+    expect(row.status).toBe("succeeded");
+    const payload = JSON.parse(row.payload_json as string) as {
+      result?: { captured?: number; commits?: Array<{ captures?: string[]; outcome?: string }> };
+    };
+    // …and the outcome reports ONLY the selected scenario's capture — the
+    // unrelated pre-existing capture must not inflate the plan's accounting.
+    expect(payload.result?.commits?.[0]?.captures).toEqual(["cap_selected"]);
+    expect(payload.result?.commits?.[0]?.outcome).toBe("captured");
+    db.close();
+  });
 });

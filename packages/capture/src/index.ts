@@ -31,7 +31,7 @@ export {
   reconstructCommit,
   resolveScenarios,
   serveStatic,
-  tolerantRecipe,
+  splitCommand,
   verifyPublication,
 } from "./reconstruct.js";
 export type {

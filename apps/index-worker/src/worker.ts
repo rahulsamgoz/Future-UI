@@ -146,7 +146,7 @@ export function claimNextJob(db: WorkerDb, workerId: string): ClaimedJob | null 
       workerId,
     };
   });
-  return (tx() as ClaimedJob | null) ?? null;
+  return tx() as ClaimedJob | null;
 }
 
 export function renewLease(db: WorkerDb, jobId: string, leaseToken: string): void {
@@ -829,7 +829,11 @@ export async function handleHistoryScan(db: WorkerDb, job: ClaimedJob, deps?: Hi
       .prepare("SELECT id, scenario_id FROM captures WHERE project_id = ? AND commit_sha = ?")
       .all(projectId, commitSha) as Array<{ id: string; scenario_id: string }>;
     const existingScenarioIds = new Set(existing.map((c) => c.scenario_id));
-    const captureIds = existing.map((c) => c.id);
+    // Plan-scoped accounting (closure-2 review): only captures whose scenario
+    // belongs to THIS plan's selected set count toward the outcome — a subset
+    // plan must not report pre-existing captures of unrelated scenarios.
+    const selectedSet = new Set(scenarioIds);
+    const captureIds = existing.filter((c) => selectedSet.has(c.scenario_id)).map((c) => c.id);
     const expectedFailures: string[] = [];
     const newScenarioOutcomes: Array<{ scenarioId: string; outcome: string }> = [];
     let error: string | undefined;

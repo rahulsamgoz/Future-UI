@@ -148,18 +148,6 @@ const historyManifest = () => `{
 }
 `;
 
-const viteReactPlugin = () => `import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-
-export default defineConfig({
-  plugins: [react()],
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-  },
-});
-`;
-
 // Commit 1: initial React+Vite app
 commit("initial react vite app", {
   ".gitignore": gitignore(),

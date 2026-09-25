@@ -92,19 +92,15 @@ export const UNBUILDABLE_MARKER = "INTENTIONALLY_UNBUILDABLE";
  * at "/#/account", which the fixture's host page hash-routes to account.html).
  * Interactions and viewports apply as-is.
  */
-export function tolerantRecipe(recipe: ScenarioRecipe): ScenarioRecipe {
-  return { ...recipe };
-}
-
-/** Resolve scenario ids/recipes to tolerant recipes. */
+/** Resolve scenario ids/recipes to recipes (used as-is; see header note). */
 export function resolveScenarios(scenarios?: Array<string | ScenarioRecipe>): ScenarioRecipe[] {
   const all = standardScenarios();
   const list = scenarios ?? all;
   return list.map((entry) => {
-    if (typeof entry !== "string") return tolerantRecipe(entry);
+    if (typeof entry !== "string") return entry;
     const recipe = all.find((r) => r.id === entry);
     if (!recipe) throw new Error(`unknown scenario id "${entry}"`);
-    return tolerantRecipe(recipe);
+    return recipe;
   });
 }
 
@@ -168,15 +164,7 @@ export async function digestTree(dir: string): Promise<string> {
     parts.push(readFileSync(path.join(dir, rel)));
     parts.push(enc.encode("\0"));
   }
-  let total = 0;
-  for (const p of parts) total += p.byteLength;
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const p of parts) {
-    merged.set(p, offset);
-    offset += p.byteLength;
-  }
-  return hashBytes(merged);
+  return hashBytes(Buffer.concat(parts));
 }
 
 /** True when any source file in the tree declares the unbuildable marker. */
@@ -295,11 +283,45 @@ export type HistoryManifest = {
 export function readHistoryManifest(dir: string): HistoryManifest | undefined {
   const manifestPath = path.join(dir, "ui-intel.history.json");
   if (!existsSync(manifestPath)) return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(readFileSync(manifestPath, "utf8")) as HistoryManifest;
+    parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch {
     return undefined;
   }
+  return validateHistoryManifest(parsed);
+}
+
+/** Runtime validation so a malformed manifest fails with a CLEAR rejection instead of an opaque downstream TypeError (closure-2 review). */
+function validateHistoryManifest(raw: unknown): HistoryManifest {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("ui-intel.history.json must be a JSON object");
+  }
+  const manifest = raw as Record<string, unknown>;
+  if (manifest.buildAdapter !== undefined) {
+    if (typeof manifest.buildAdapter !== "object" || manifest.buildAdapter === null || Array.isArray(manifest.buildAdapter)) {
+      throw new Error("ui-intel.history.json: buildAdapter must be an object");
+    }
+    const adapter = manifest.buildAdapter as Record<string, unknown>;
+    for (const key of ["appDir", "installCommand", "buildCommand", "outDir"] as const) {
+      if (adapter[key] !== undefined && typeof adapter[key] !== "string") {
+        throw new Error(`ui-intel.history.json: buildAdapter.${key} must be a string`);
+      }
+    }
+    if (
+      adapter.timeoutMs !== undefined &&
+      (typeof adapter.timeoutMs !== "number" || !Number.isFinite(adapter.timeoutMs) || adapter.timeoutMs <= 0)
+    ) {
+      throw new Error("ui-intel.history.json: buildAdapter.timeoutMs must be a positive finite number");
+    }
+    if (
+      adapter.envAllowlist !== undefined &&
+      (!Array.isArray(adapter.envAllowlist) || adapter.envAllowlist.some((v) => typeof v !== "string"))
+    ) {
+      throw new Error("ui-intel.history.json: buildAdapter.envAllowlist must be a string array");
+    }
+  }
+  return raw as HistoryManifest;
 }
 
 /** Promise wrapper around execFile with timeout and max-buffer protection. */
@@ -325,6 +347,51 @@ function execFilePromise(
 }
 
 /**
+ * Reject a resolved path that escapes the materialized worktree (closure-2
+ * review: manifest-supplied appDir/outDir are attacker-controlled when the
+ * repo is untrusted).
+ */
+function assertContainedIn(root: string, candidate: string, field: string): void {
+  const rel = path.relative(root, candidate);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`ui-intel.history.json ${field} escapes the reconstruction worktree: ${candidate}`);
+  }
+}
+
+/**
+ * Shell-free command splitting that respects single/double quotes (closure-2
+ * review: naive whitespace splitting broke quoted args). No globbing, no
+ * expansion — the parts go straight to execFile's argv.
+ */
+export function splitCommand(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | undefined;
+  let hasCurrent = false;
+  for (const ch of command.trim()) {
+    if (quote) {
+      if (ch === quote) quote = undefined;
+      else current += ch;
+    } else if (ch === "\"" || ch === "'") {
+      quote = ch;
+      hasCurrent = true;
+    } else if (/\s/.test(ch)) {
+      if (hasCurrent || current.length > 0) {
+        parts.push(current);
+        current = "";
+        hasCurrent = false;
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (quote) throw new Error(`unterminated quote in command: ${command}`);
+  if (hasCurrent || current.length > 0) parts.push(current);
+  if (parts.length === 0) throw new Error("empty command");
+  return parts;
+}
+
+/**
  * Build + serve a materialized commit that declares a build adapter in
  * ui-intel.history.json. Runs install + build with resource limits, then serves
  * the built output directory on an ephemeral port. Falls back to serveStatic
@@ -345,6 +412,10 @@ export async function buildAndServe(
 
   const appDir = path.resolve(materializedDir, config.appDir);
   const outDir = path.resolve(appDir, config.outDir);
+  // Containment (closure-2 review): a manifest must never make the worker
+  // build in — or serve from — a directory outside the materialized worktree.
+  assertContainedIn(materializedDir, appDir, "buildAdapter.appDir");
+  assertContainedIn(materializedDir, outDir, "buildAdapter.outDir");
   const maxOutput = 2 * 1024 * 1024; // 2 MB stdout+stderr cap
 
   const allowedEnv: NodeJS.ProcessEnv = {};
@@ -354,11 +425,11 @@ export async function buildAndServe(
   allowedEnv["PATH"] = process.env.PATH ?? "";
   allowedEnv["HOME"] = process.env.HOME ?? "";
 
-  const installArgs = config.installCommand.split(/\s+/).filter(Boolean);
+  const installArgs = splitCommand(config.installCommand);
   const installCmd = installArgs.shift()!;
   await execFilePromise(installCmd, installArgs, { cwd: appDir, timeoutMs: config.timeoutMs, maxOutput, env: allowedEnv });
 
-  const buildArgs = config.buildCommand.split(/\s+/).filter(Boolean);
+  const buildArgs = splitCommand(config.buildCommand);
   const buildCmd = buildArgs.shift()!;
   await execFilePromise(buildCmd, buildArgs, { cwd: appDir, timeoutMs: config.timeoutMs, maxOutput, env: allowedEnv });
 
@@ -569,13 +640,21 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
 
   let server: { baseUrl: string; close: () => Promise<void> };
   let buildOutDir: string | undefined;
-  if (manifest?.buildAdapter) {
-    log(`reconstruct ${args.commitSha}: build adapter detected in ui-intel.history.json`);
-    const built = await buildAndServe(materialized.dir, manifest);
-    server = built;
-    buildOutDir = built.buildOutDir;
-  } else {
-    server = await serveStatic(materialized.dir);
+  try {
+    if (manifest?.buildAdapter) {
+      log(`reconstruct ${args.commitSha}: build adapter detected in ui-intel.history.json`);
+      const built = await buildAndServe(materialized.dir, manifest);
+      server = built;
+      buildOutDir = built.buildOutDir;
+    } else {
+      server = await serveStatic(materialized.dir);
+    }
+  } catch (error) {
+    // Setup (install/build/serve) failed before the main try below: the
+    // worktree + temp root must still be cleaned up (closure-2 review —
+    // previously a build failure here leaked the materialized worktree).
+    materialized.cleanup();
+    throw error;
   }
   try {
     const servedDir = buildOutDir ?? materialized.dir;
@@ -592,7 +671,6 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
     let firstUnbuildableFailure: string | undefined;
 
     for (const recipe of recipes) {
-      const remaining = firstUnbuildableFailure !== undefined;
       // Spec section 11: equivalent work is deduplicated by request key —
       // reuse an already-published capture of the same (commit, scenario,
       // build digest) instead of re-capturing.
@@ -646,7 +724,7 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
         log(`reconstruct ${args.commitSha}: captured ${recipe.id} -> ${published.captureId}`);
       } catch (error) {
         const message = (error as Error).message;
-        if (remaining) {
+        if (firstUnbuildableFailure !== undefined) {
           // The commit already proved itself unbuildable: skip the remaining
           // scenarios instead of burning identical browser timeouts.
           results.push({
