@@ -32,10 +32,27 @@ function stripFences(content: string): string {
   return (fenced ? fenced[1] : content).trim();
 }
 
+/** Base64 for image bytes (Buffer in node, chunked btoa elsewhere). */
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export class OpenAICompatProvider implements ModelProvider {
   readonly id = "openai-compat";
+  /** Declared capabilities surface to the orchestrator (audit finding 4). */
+  readonly capabilities: { vision?: boolean } | undefined;
 
-  constructor(private readonly options: OpenAICompatOptions) {}
+  constructor(private readonly options: OpenAICompatOptions) {
+    this.capabilities = options.capabilities ? { ...options.capabilities } : undefined;
+  }
 
   async generate(input: ProviderInput): Promise<ProviderOutput> {
     try {
@@ -82,16 +99,29 @@ export class OpenAICompatProvider implements ModelProvider {
 
   /**
    * Text-first by default. When the provider declares vision AND grounded
-   * image references carry fetchable URLs, they are attached as image_url
-   * parts after the text prompt (which still carries the grounded summaries).
+   * references carry image content, they are attached as image_url parts
+   * after the text prompt (which still carries the grounded summaries).
+   * Bytes-first (audit finding 4): grounded `imageBytes` become base64 data
+   * URLs so the provider never needs to fetch; a fetchable `imageUrl` (or
+   * legacy `url`) is used only when bytes are absent.
    */
   private userContent(
     input: ProviderInput
   ): string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> {
     if (!this.options.capabilities?.vision) return userPrompt(input);
     const images = input.references
-      .filter((r) => r.kind === "image" && typeof r.url === "string" && r.url.length > 0)
-      .map((r) => ({ type: "image_url" as const, image_url: { url: r.url as string } }));
+      .filter((r) => r.kind === "image" || r.kind === "history")
+      .flatMap((r) => {
+        if (r.imageBytes && r.imageBytes.length > 0) {
+          const mediaType = r.imageMediaType ?? "image/png";
+          return [{ type: "image_url" as const, image_url: { url: `data:${mediaType};base64,${bytesToBase64(r.imageBytes)}` } }];
+        }
+        const url = r.imageUrl ?? (r.kind === "image" ? r.url : undefined);
+        if (typeof url === "string" && url.length > 0) {
+          return [{ type: "image_url" as const, image_url: { url } }];
+        }
+        return [];
+      });
     if (images.length === 0) return userPrompt(input);
     return [{ type: "text", text: userPrompt(input) }, ...images];
   }

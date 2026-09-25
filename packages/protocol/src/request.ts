@@ -4,11 +4,18 @@
  * become a target identity.
  */
 import { z } from "zod";
+import { pageContractSchema } from "./contract.js";
 
 export const targetQuerySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("selection"), entityId: z.string().min(1), runtimeInstanceId: z.string().min(1) }),
   z.object({ kind: z.literal("text"), text: z.string().min(1) }),
   z.object({ kind: z.literal("screenshot"), artifactId: z.string().min(1), cropId: z.string().optional() }),
+  // Page scope (audit fix: the proposal API supports page targets). The
+  // client supplies its page contract; layout candidates are validated
+  // against it server-side AND revalidated against the app's own contracts
+  // at acceptance (PageComposer), so a permissive submitted contract cannot
+  // reach the rendered page.
+  z.object({ kind: z.literal("page"), pageKey: z.string().min(1), pageContract: pageContractSchema }),
 ]);
 export type TargetQuery = z.infer<typeof targetQuerySchema>;
 

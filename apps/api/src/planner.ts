@@ -4,14 +4,70 @@
  * profile selects registered commits in the window; estimates use a ±30%
  * uncertainty range (no pilot data).
  */
-import { newId, type HistoryPlanInput, type HistoryPlanRecord } from "@ui-intelligence/protocol";
-import { UiIntelligenceError } from "@ui-intelligence/protocol";
+import { newId, UiIntelligenceError, type HistoryPlanInput, type HistoryPlanRecord } from "@ui-intelligence/protocol";
+import { statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 import { insertHistoryPlan } from "./store.js";
 
 export const VIEWPORTS_PER_SCENARIO = 2;
 export const ESTIMATE_UNCERTAINTY = 0.3;
+
+/**
+ * Allowlist of directories a history plan's fixtureRepo may point at (audit
+ * finding 3a: an arbitrary-path read must not be possible through plan input).
+ * Configured via UI_INTEL_RECONSTRUCT_ROOTS (path-delimiter separated);
+ * defaults to the repo root (server cwd) plus the OS temp dir, so dev-profile
+ * fixture corpora resolve while paths like /etc or other users' directories
+ * are rejected.
+ */
+export function reconstructRoots(): string[] {
+  const configured = process.env.UI_INTEL_RECONSTRUCT_ROOTS;
+  if (configured && configured.trim().length > 0) {
+    return configured
+      .split(path.delimiter)
+      .map((root) => path.resolve(root.trim()))
+      .filter((root) => root.length > 0);
+  }
+  return [path.resolve(process.cwd()), path.resolve(tmpdir())];
+}
+
+/**
+ * Validate + resolve a plan input's fixtureRepo: it must resolve to an
+ * EXISTING directory inside one of the reconstruct roots. Returns the
+ * resolved absolute path for persistence. Throws SCHEMA_INVALID (422) when
+ * the path escapes the allowlist, points at a missing/non-directory path, or
+ * names a remote repository (remote clones are not configured in the dev
+ * profile).
+ */
+export function resolveFixtureRepo(raw: string): string {
+  const fail = (message: string) =>
+    new UiIntelligenceError("SCHEMA_INVALID", `fixtureRepo rejected: ${message}`, { httpStatus: 422 });
+  if (/^[a-z]+:\/\//i.test(raw) || raw.startsWith("git@")) {
+    throw fail("remote repositories are not supported; pass a local path");
+  }
+  const resolved = path.resolve(raw);
+  const insideRoot = reconstructRoots().some(
+    (root) => resolved === root || resolved.startsWith(root + path.sep),
+  );
+  if (!insideRoot) {
+    throw fail(
+      `${resolved} is outside the configured reconstruct roots (UI_INTEL_RECONSTRUCT_ROOTS)`,
+    );
+  }
+  let stats;
+  try {
+    stats = statSync(resolved);
+  } catch {
+    throw fail(`${resolved} does not exist`);
+  }
+  if (!stats.isDirectory()) {
+    throw fail(`${resolved} is not a directory`);
+  }
+  return resolved;
+}
 
 function isIsoDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));

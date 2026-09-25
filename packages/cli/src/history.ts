@@ -22,6 +22,8 @@ export type HistoryPlanArgs = {
   maxBuilds: number;
   timezone?: string;
   renderBudgetMs?: number;
+  /** Optional local fixture repo carried through to the plan input. */
+  fixtureRepo?: string;
   now?: Date;
 };
 
@@ -97,6 +99,7 @@ export async function buildHistoryPlan(args: HistoryPlanArgs): Promise<LocalHist
       maxBuilds: args.maxBuilds,
       renderBudgetMs: args.renderBudgetMs ?? 600_000,
       timezone: args.timezone ?? "UTC",
+      ...(args.fixtureRepo ? { fixtureRepo: args.fixtureRepo } : {}),
     },
     resolvedTips: tips,
     selectedCommits: selected,

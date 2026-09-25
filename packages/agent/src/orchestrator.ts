@@ -6,6 +6,9 @@
 import {
   newId,
   type DesignReference,
+  type EntityContract,
+  type LayoutNode,
+  type PageContract,
   type Proposal,
   type ProposalCandidate,
   type ProposalStatus,
@@ -13,7 +16,8 @@ import {
   type UiRequest,
   type ValidationReport,
 } from "@ui-intelligence/protocol";
-import type { ModelProvider, ProviderInput, ProviderReference, RendererPropertySchema } from "./provider.js";
+import type { ModelProvider, ProviderInput, ProviderReference, RendererPropertySchema, RendererSchema } from "./provider.js";
+import { referenceHasImageContent } from "./provider.js";
 
 export type OrchestratorPolicy = {
   maxCandidates: number;
@@ -40,6 +44,19 @@ export type ProposeResult = {
   status: ProposalStatus;
   candidates: ProposalCandidate[];
   failure?: { code: string; message: string };
+  /**
+   * Honest degradation note (audit finding 4): set when image references
+   * could not reach the provider (no declared vision capability, or the
+   * grounded reference carried no usable image content). Image references
+   * are never silently dropped.
+   */
+  degraded?: string;
+};
+
+export type ProposePageTarget = {
+  pageKey: string;
+  pageContract: PageContract;
+  currentReadSet: TargetReadSet;
 };
 
 export type OrchestratorDeps = {
@@ -57,6 +74,19 @@ export type OrchestratorDeps = {
    * generation degrades gracefully instead of failing.
    */
   loadReference?: (ref: DesignReference) => Promise<ProviderReference | null>;
+  /**
+   * Page-scope layout validator (audit finding 4). Typically runtime-core's
+   * ProposalValidator.validatePageLayout. When absent, page-scope generation
+   * fails closed (candidates are rejected with a clear message) — provider
+   * output is never trusted without validation.
+   */
+  validatePageLayout?: (
+    root: LayoutNode,
+    pageContract: PageContract,
+    entityContracts: Map<string, EntityContract>,
+    readSet: TargetReadSet,
+    policyVersion: number
+  ) => Promise<ValidationReport>;
   policy?: Partial<OrchestratorPolicy>;
 };
 
@@ -72,6 +102,90 @@ type ProviderCandidateLike = {
   originKind: "generated" | "historical_adaptation" | "recorded_history";
   summary: string;
 };
+
+/**
+ * Property schemas of the three approved page layouts (spec section 7),
+ * matching packages/renderers pageLayouts.tsx. Page candidates are prompted
+ * and schema-checked against these.
+ */
+export const PAGE_LAYOUT_RENDERER_SCHEMAS: RendererSchema[] = [
+  {
+    id: "stack@1",
+    propertySchema: {
+      gap: { type: "enum", values: ["none", "sm", "md", "lg"], default: "md" },
+    },
+  },
+  {
+    id: "grid@1",
+    propertySchema: {
+      columns: { type: "number", min: 1, max: 4, default: 2 },
+    },
+  },
+  {
+    id: "split@1",
+    propertySchema: {
+      ratio: { type: "enum", values: ["50-50", "33-67", "67-33"], default: "50-50" },
+      orientation: { type: "enum", values: ["horizontal", "vertical"], default: "horizontal" },
+    },
+  },
+];
+
+/**
+ * Degradation note for image references (audit finding 4): when the provider
+ * does not declare vision, image references cannot reach the model and that
+ * MUST surface in the output — never a silent drop. When vision IS declared
+ * but no grounded reference carries usable image content, say so too.
+ */
+export function imageReferenceNote(
+  references: ProviderReference[],
+  visionCapable: boolean
+): { degraded: string } | undefined {
+  // Count every reference the vision path treats as an image input: image
+  // refs always (an image reference without grounded content is still a lost
+  // image), and history refs when they carry a grounded screenshot — the
+  // provider attaches both kinds (closure review: history references with
+  // screenshot bytes were previously dropped from this count).
+  const imageRefs = references.filter(
+    (r) => r.kind === "image" || (r.kind === "history" && referenceHasImageContent(r))
+  );
+  if (imageRefs.length === 0) return undefined;
+  if (!visionCapable) {
+    return {
+      degraded: `${imageRefs.length} image reference(s) ignored: provider not vision-capable`,
+    };
+  }
+  const usable = imageRefs.some(referenceHasImageContent);
+  if (!usable) {
+    return {
+      degraded: `${imageRefs.length} image reference(s) carried no usable image content (no bytes or fetchable url)`,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Minimal entity contracts for page-layout validation: regions reference
+ * entityKeys declared by the page contract's slots; validatePageLayout only
+ * checks membership.
+ */
+export function entityContractsForPage(page: PageContract): Map<string, EntityContract> {
+  return new Map(
+    page.slots.map((slot) => [
+      slot.entityKey,
+      {
+        entityKey: slot.entityKey,
+        contractVersion: page.contractVersion,
+        dataBinding: `page:${page.pageKey}:${slot.slotId}`,
+        allowedRepresentations:
+          slot.compatibleRenderers.length > 0 ? [...slot.compatibleRenderers] : ["any"],
+        actions: [],
+        requiredFields: [],
+        stateFields: [],
+        constraints: { preserveActions: true, preservePriceVisibility: false },
+      },
+    ])
+  );
+}
 
 export class ProposalOrchestrator {
   private readonly policy: OrchestratorPolicy;
@@ -91,6 +205,7 @@ export class ProposalOrchestrator {
     for (const ref of request.references) {
       references.push(await this.groundReference(ref));
     }
+    const degraded = imageReferenceNote(references, this.deps.provider.capabilities?.vision === true);
 
     const providerInput: ProviderInput = {
       instruction: request.instruction,
@@ -110,6 +225,7 @@ export class ProposalOrchestrator {
         status: "failed",
         candidates: [],
         failure: { code: "TIMEOUT", message: `provider exceeded the ${this.policy.timeoutMs}ms budget` },
+        ...degraded,
       };
     }
 
@@ -122,6 +238,7 @@ export class ProposalOrchestrator {
           code: "NO_CANDIDATES",
           message: output.degraded ?? "provider returned no candidates",
         },
+        ...degraded,
       };
     }
 
@@ -152,10 +269,144 @@ export class ProposalOrchestrator {
           code: "VALIDATION_FAILED",
           message: rejected.length > 0 ? rejected.join("; ") : "no candidate passed validation",
         },
+        ...degraded,
       };
     }
 
-    return { proposalId, status: "ready", candidates };
+    return { proposalId, status: "ready", candidates, ...degraded };
+  }
+
+  /**
+   * Page-scope generation (audit finding 4): the provider proposes page
+   * LAYOUT candidates (root layout type + properties within the page
+   * contract's allowedLayouts); the orchestrator composes the root with one
+   * region per declared slot and validates the whole tree against the page
+   * contract (allowedLayouts, slots, maxDepth/maxNodes) with the injected
+   * page-layout validator (runtime-core's ProposalValidator.validatePageLayout).
+   * The provider cannot expand the authorized target: layouts outside
+   * allowedLayouts and candidates failing validation are rejected.
+   */
+  async proposePage(request: UiRequest, target: ProposePageTarget): Promise<ProposeResult> {
+    const proposalId = newId("proposal");
+    const requested = Math.min(
+      Math.max(1, request.requestedCandidateCount),
+      this.policy.maxCandidates
+    );
+    const page = target.pageContract;
+
+    const references: ProviderReference[] = [];
+    for (const ref of request.references) {
+      references.push(await this.groundReference(ref));
+    }
+    const degraded = imageReferenceNote(references, this.deps.provider.capabilities?.vision === true);
+
+    const providerInput: ProviderInput = {
+      instruction: request.instruction,
+      targetContract: {
+        entityKey: page.pageKey,
+        allowedRepresentations: [...page.allowedLayouts],
+        dataBinding: `page:${page.pageKey}`,
+        actions: [],
+      },
+      rendererSchemas: PAGE_LAYOUT_RENDERER_SCHEMAS.filter((s) =>
+        (page.allowedLayouts as string[]).includes(s.id)
+      ),
+      references,
+      requestedCandidateCount: requested,
+    };
+
+    const deadline = Date.now() + this.policy.timeoutMs;
+    let output;
+    try {
+      output = await this.withTimeout(providerInput, deadline);
+    } catch {
+      return {
+        proposalId,
+        status: "failed",
+        candidates: [],
+        failure: { code: "TIMEOUT", message: `provider exceeded the ${this.policy.timeoutMs}ms budget` },
+        ...degraded,
+      };
+    }
+
+    if (output.candidates.length === 0) {
+      return {
+        proposalId,
+        status: "failed",
+        candidates: [],
+        failure: {
+          code: "NO_CANDIDATES",
+          message: output.degraded ?? "provider returned no candidates",
+        },
+        ...degraded,
+      };
+    }
+
+    const candidates: ProposalCandidate[] = [];
+    const rejected: string[] = [];
+
+    for (const raw of output.candidates) {
+      if (candidates.length >= this.policy.maxCandidates) break;
+
+      if (!(page.allowedLayouts as string[]).includes(raw.type)) {
+        rejected.push(`layout type "${raw.type}" is not allowed by page "${page.pageKey}"`);
+        continue;
+      }
+      if (!this.deps.validatePageLayout) {
+        rejected.push(`"${raw.type}": no page layout validator configured — candidate rejected (fail closed)`);
+        continue;
+      }
+      const root = this.layoutRootFor(raw, page);
+      const report = await this.deps.validatePageLayout(
+        root,
+        page,
+        entityContractsForPage(page),
+        target.currentReadSet,
+        target.currentReadSet.policyVersion
+      );
+      if (!report.passed) {
+        rejected.push(...report.errors.map((e) => `${raw.type}: ${e.message}`));
+        continue;
+      }
+      candidates.push({
+        candidateId: newId("candidate"),
+        presentation: root,
+        origin: { kind: raw.originKind, referenceIds: [] },
+        validation: report,
+        summary: `${raw.type} page layout candidate (${raw.originKind})`,
+      });
+    }
+
+    if (candidates.length === 0) {
+      return {
+        proposalId,
+        status: "failed",
+        candidates: [],
+        failure: {
+          code: "VALIDATION_FAILED",
+          message: rejected.length > 0 ? rejected.join("; ") : "no candidate passed validation",
+        },
+        ...degraded,
+      };
+    }
+
+    return { proposalId, status: "ready", candidates, ...degraded };
+  }
+
+  /** Compose the provider's root layout type + properties with one region per declared slot. */
+  private layoutRootFor(raw: ProviderCandidateLike, page: PageContract): LayoutNode {
+    return {
+      kind: "layout",
+      nodeId: "root",
+      type: raw.type as "stack@1" | "grid@1" | "split@1",
+      properties: raw.properties as Record<string, import("@ui-intelligence/protocol").JsonValue>,
+      children: page.slots.map((slot) => ({
+        kind: "region" as const,
+        nodeId: `region_${slot.slotId}`,
+        slotId: slot.slotId,
+        entityId: slot.entityKey,
+      })),
+    };
   }
 
   /**

@@ -10,7 +10,9 @@
  * 156 planned capture slots (13 commits x 6 scenarios x 2 viewports).
  *
  * Every commit is a RUNNABLE static app with no build step: `index.html` +
- * `app.js` (+ `tokens.css` / `styles.css` where the narrative adds them).
+ * `app.js` (the catalog route) + `account.html` + `account.js` (the account
+ * route, hash-routed from the host page and also served at /account) +
+ * `tokens.css` / `styles.css` where the narrative adds them.
  * Serving the commit directory IS the build for this corpus (see
  * packages/capture/src/reconstruct.ts). Each page renders the committed UI
  * with real `data-ui-entity` anchors and a commit-distinct heading so captures
@@ -45,6 +47,18 @@ const STEP_MS = 2.6 * 24 * 60 * 60 * 1000; // 2026-08-01 .. 2026-09-01
 let commitIndex = 0;
 function commit(message, files) {
   const date = new Date(START + commitIndex * STEP_MS).toISOString().replace("Z", " +0000");
+  // Every commit carries the account route: profileForm in all commits, the
+  // admin panel from the split commit (8th) onward, and the same
+  // INTENTIONALLY_UNBUILDABLE breakage as app.js so EVERY scenario of the
+  // unbuildable commit fails — not only the catalog ones.
+  const broken = files["app.js"].includes("INTENTIONALLY_UNBUILDABLE");
+  files["account.html"] = accountHtml(message);
+  files["account.js"] = accountJs({
+    stepName: message,
+    stepNumber: commitIndex + 1,
+    withAdminPanel: commitIndex >= 7,
+    broken,
+  });
   for (const [file, content] of Object.entries(files)) {
     const full = path.join(outDir, file);
     mkdirSync(path.dirname(full), { recursive: true });
@@ -65,7 +79,9 @@ function commit(message, files) {
 /**
  * index.html: the static host page. The heading text (step name) makes every
  * commit visually distinct so captures are attributable. The anchor-bearing
- * subtree is rendered by app.js into #app.
+ * subtree is rendered by app.js into #app. The inline script hash-routes
+ * "#/account" to account.html (preserving the __fixture query) so the account
+ * scenarios capture the account page — the recipe routes are used as-is.
  */
 const indexHtml = (stepName) => `<!doctype html>
 <html lang="en">
@@ -77,8 +93,34 @@ const indexHtml = (stepName) => `<!doctype html>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <script>
+      if (location.hash.indexOf("#/account") === 0) {
+        location.replace("account.html" + location.search);
+      }
+    </script>
     <main id="app" data-ui-entity="catalog.page"></main>
     <script src="app.js"></script>
+  </body>
+</html>
+`;
+
+/**
+ * account.html: the account route document (also served directly at /account
+ * by the reconstruct static server). account.js renders the committed account
+ * UI into #app.
+ */
+const accountHtml = (stepName) => `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Account — ${stepName}</title>
+    <link rel="stylesheet" href="tokens.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app" data-ui-entity="account.page"></main>
+    <script src="account.js"></script>
   </body>
 </html>
 `;
@@ -123,12 +165,21 @@ function appJs({ stepName, stepNumber, renderer, className, instanceKeys, withSo
     `\`;`,
     `  }).join("");`,
     `}`,
+    `function chooserContentMarkup(key) {`,
+    `  if (products.length === 0) {`,
+    `    // Empty state: the chooser boundary stays visible with a real message.`,
+    `    return \``,
+    `        <p class="empty-state" role="status">No products available yet</p>`,
+    `\`;`,
+    `  }`,
+    `  return productCardMarkup(key);`,
+    `}`,
     ``,
     `function chooserMarkup() {`,
     `  return instanceKeys.map(function (key) {`,
     `    return \``,
     `      <div class="\${className}" data-ui-entity="catalog.productChooser" data-ui-instance="\${key}" data-renderer="\${renderer}" role="region" aria-label="Product chooser">`,
-    `\${productCardMarkup(key)}`,
+    `\${chooserContentMarkup(key)}`,
     `      </div>`,
     `\`;`,
     `  }).join("");`,
@@ -176,6 +227,75 @@ const tokensCss = (spacing) => `:root {
   --font-stack: system-ui, sans-serif;
 }
 `;
+
+/**
+ * account.js emitter: the account route with the profile form boundary in
+ * EVERY commit, the admin panel boundary from the split commit onward, and
+ * real loading/error fixture states (same ?__fixture mechanism as the
+ * catalog). The broken commit breaks this script too, so EVERY scenario of
+ * that commit fails — never only the catalog ones.
+ */
+function accountJs({ stepName, stepNumber, withAdminPanel, broken }) {
+  const q = JSON.stringify;
+  const L = [
+    `// Account fixture app — step ${stepNumber}: ${stepName}`,
+    `// Runnable static app (no build step): renders the committed account UI`,
+    `// into #app with real data-ui-entity anchors.`,
+    `var stepName = ${q(stepName)};`,
+    `var stepNumber = ${q(stepNumber)};`,
+    `var withAdminPanel = ${withAdminPanel ? "true" : "false"};`,
+    ``,
+  ];
+  if (broken) {
+    L.push(
+      `// INTENTIONALLY_UNBUILDABLE: this revision fails during load; readiness is`,
+      `// never satisfied and every scenario capture for this commit must be recorded`,
+      `// as an EXPECTED failure, never a synthetic success.`,
+      `throw new Error("intentionally unbuildable");`,
+      ``
+    );
+  }
+  if (withAdminPanel) {
+    L.push(
+      ``,
+      `// Split-commit narrative: the admin panel is a separate boundary from`,
+      `// this revision onward (its anchor exists in the source only here).`,
+      `function adminMarkup() {`,
+      `  return \``,
+      `      <section class="admin-panel" data-ui-entity="account.adminPanel" role="region" aria-label="Admin panel">Admin panel: member administration</section>`,
+      `\`;`,
+      `}`
+    );
+  } else {
+    L.push(``, `var adminMarkup = null;`);
+  }
+  L.push(
+    `var fixture = new URLSearchParams(location.search).get("__fixture") || "default";`,
+    ``,
+    `function render() {`,
+    `  document.getElementById("app").innerHTML = \``,
+    `    <h1>Account — step \${stepNumber}: \${stepName}</h1>`,
+    `\${fixture === "error" ? \`<div class="account-error" role="alert">Unable to load account settings</div>\` : ""}`,
+    `    <form class="profile-form" data-ui-entity="account.profileForm" role="form" aria-label="Profile settings">`,
+    `      <label>Name <input type="text" name="name" value="Ada Lovelace" /></label>`,
+    `      <label>Email <input type="email" name="email" value="ada@example.com" /></label>`,
+    `      <button type="button" data-ui-entity="ui.primaryButton">Save profile</button>`,
+    `    </form>`,
+    `\${adminMarkup ? adminMarkup() : ""}`,
+    `  \`;`,
+    `}`,
+    ``,
+    `if (fixture === "loading") {`,
+    `  // Defer rendering so the loading scenario observes a real pending state`,
+    `  // before readiness is satisfied.`,
+    `  setTimeout(render, 350);`,
+    `} else {`,
+    `  render();`,
+    `}`,
+    ``
+  );
+  return L.join("\n");
+}
 
 const baseStyles = `.carousel { display: flex; }
 `;
@@ -359,28 +479,45 @@ commit("fix build again", {
 });
 
 function anchorsFor(index) {
-  const anchors = ["catalog.productChooser", "catalog.page", "catalog.productCard"];
+  const anchors = [
+    "catalog.page",
+    "catalog.productChooser",
+    "catalog.productCard",
+    "account.page",
+    "account.profileForm",
+  ];
   if (index === 8) anchors.push("catalog.sortControl");
+  if (index >= 8) anchors.push("account.adminPanel");
   return anchors;
 }
+
+const SCENARIO_IDS = [
+  "catalog-default-desktop",
+  "catalog-default-mobile",
+  "catalog-empty-desktop",
+  "catalog-empty-mobile",
+  "catalog-loading-desktop",
+  "catalog-loading-mobile",
+  "account-default-desktop",
+  "account-default-mobile",
+  "account-loading-desktop",
+  "account-loading-mobile",
+  "account-error-desktop",
+  "account-error-mobile",
+];
 
 const groundTruth = {
   corpus: {
     commits: 13,
-    scenarios: 6,
+    scenarios: 12,
     viewports: 2,
-    plannedCaptureSlots: 13 * 6 * 2,
+    plannedCaptureSlots: 13 * 12,
     runnable: true,
-    entry: ["index.html", "app.js"],
-    note: "every buildable commit is a runnable static app (no build step); serving the commit tree IS the build",
-    scenarioIds: [
-      "catalog-default-desktop",
-      "catalog-empty-desktop",
-      "catalog-loading-desktop",
-      "catalog-default-mobile",
-      "account-default-desktop",
-      "account-error-desktop",
-    ],
+    entry: ["index.html", "app.js", "account.html", "account.js"],
+    note:
+      "every buildable commit is a runnable static app (no build step); serving the commit tree IS the build; " +
+      "six named route/state scenarios x 2 viewports = 12 recipes per commit",
+    scenarioIds: SCENARIO_IDS,
   },
   commits: [
     { commit: 1, message: "initial catalog with carousel", buildOutcome: "buildable", anchors: anchorsFor(1) },

@@ -280,6 +280,12 @@ export async function resolveTarget(
     return await resolveScreenshotTarget(db, projectId, query, grounding);
   }
 
+  if (query.kind === "page") {
+    // Page targets are resolved by identity (the proposal route handles them
+    // before entity resolution); resolution of a page is the page itself.
+    return { status: "resolved", entityId: `page:${query.pageKey}`, entityKey: query.pageKey };
+  }
+
   const index = cache.get(projectId);
   return resolveTargetFromText(index, { text: query.text }, anchorSourcesForProject(db, projectId));
 }

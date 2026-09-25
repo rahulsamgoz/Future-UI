@@ -112,19 +112,20 @@ describe("history_scan with fixtureRepo performs reconstruction", () => {
     const captureRows = db
       .prepare("SELECT id, commit_sha, scenario_id FROM captures WHERE project_id = ? ORDER BY id")
       .all(PROJECT) as Array<{ id: string; commit_sha: string; scenario_id: string }>;
-    expect(captureRows).toHaveLength(12);
+    // 2 commits x 12 standard scenario recipes (6 named scenarios x 2 viewports).
+    expect(captureRows).toHaveLength(24);
     expect(new Set(captureRows.map((c) => c.commit_sha)).size).toBe(2);
     const indexJobs = db
       .prepare("SELECT COUNT(*) AS n FROM jobs WHERE kind = 'index_capture'")
       .get() as { n: number };
-    expect(indexJobs.n).toBe(12);
+    expect(indexJobs.n).toBe(24);
 
     // Second run: everything already captured — no new reconstruction, no duplicates.
     const reconstructCallsAfterFirstRun = reconstruct.mock.calls.length;
     const jobId2 = enqueueHistoryScan(db, "plan_recon");
     // The queue holds the index_capture jobs from the first run; drain until
     // the second history_scan job reaches a terminal state.
-    for (let processed = 0; processed < 20; processed += 1) {
+    for (let processed = 0; processed < 40; processed += 1) {
       if ((db.prepare("SELECT status FROM jobs WHERE id = ?").get(jobId2) as { status: string }).status !== "queued") break;
       await worker.runOnce();
     }
@@ -137,7 +138,7 @@ describe("history_scan with fixtureRepo performs reconstruction", () => {
     expect(payload2.result?.captured).toBe(2); // extended without duplicating
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM captures WHERE project_id = ?").get(PROJECT) as { n: number }).n
-    ).toBe(12);
+    ).toBe(24);
     db.close();
   });
 

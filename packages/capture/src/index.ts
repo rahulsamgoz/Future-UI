@@ -7,13 +7,23 @@ export {
 export type { ExecuteResult, RunOptions } from "./scenario-runner.js";
 export { buildObservationsFromEvaluation, buildOccurrenceId, redactText, sanitizeVisibleText } from "./observations.js";
 export { CaptureUploader } from "./uploader.js";
+export {
+  ALLOW_NO_BROWSER_ENV,
+  browserGate,
+  launchHeadlessChromium,
+  probeChromium,
+} from "./browser-gate.js";
+export type { BrowserAvailability, BrowserGateDecision, BrowserProbe } from "./browser-gate.js";
 export type { UploadApi, UploadResult } from "./uploader.js";
 export { standardScenarios } from "./scenarios.js";
 export {
   UNBUILDABLE_MARKER,
   declaresUnbuildable,
+  digestServedPage,
   digestTree,
+  executeManagedRun,
   historyApiFromEnv,
+  isLocalRepoPath,
   materializeCommit,
   publishCapture,
   reconstructCommit,
@@ -24,6 +34,10 @@ export {
 } from "./reconstruct.js";
 export type {
   CommitReconstruction,
+  ManagedRunArgs,
+  ManagedRunOutcome,
+  ManagedRunProvenance,
+  ManagedScenarioResult,
   PublishedCapture,
   ReconstructCommitArgs,
   ReconstructionOutcome,

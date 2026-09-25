@@ -5,6 +5,7 @@
  * shared table abstraction.
  */
 import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import {
   ProposalOrchestrator,
@@ -14,8 +15,17 @@ import {
   type ModelProvider,
   type RendererSchema,
 } from "@ui-intelligence/agent";
+import { ProposalValidator, RendererRegistry } from "@ui-intelligence/runtime-core";
 import { lineageCandidates } from "./lineage.js";
-import { backoffMs, newId, type DesignReference, type JobKind, type JobStage } from "@ui-intelligence/protocol";
+import {
+  backoffMs,
+  newId,
+  type DesignReference,
+  type JobKind,
+  type JobStage,
+  type PageContract,
+  type UiRequest,
+} from "@ui-intelligence/protocol";
 import type { ProviderReference } from "@ui-intelligence/agent";
 import { historyApiFromEnv, reconstructCommit, standardScenarios } from "@ui-intelligence/capture";
 import type { CommitReconstruction, UploadApi } from "@ui-intelligence/capture";
@@ -394,6 +404,36 @@ export async function handleIndexCapture(db: WorkerDb, job: ClaimedJob): Promise
  * screenshot artifact; image references verify the artifact belongs to the
  * project. Unresolvable references return null → orchestrator placeholder.
  */
+/**
+ * Ground artifact image content (audit finding 4) from the shared store.
+ * Bytes-first (digest-sharded fs layout, same as the API's fs driver), with
+ * a fetchable absolute URL built from UI_INTEL_PUBLIC_API_BASE as fallback.
+ */
+function groundArtifactContent(
+  db: WorkerDb,
+  projectId: string,
+  artifactId: string
+): Pick<ProviderReference, "imageBytes" | "imageUrl" | "imageMediaType"> {
+  const artifact = db
+    .prepare("SELECT id, digest, mime_type FROM artifacts WHERE project_id = ? AND id = ?")
+    .get(projectId, artifactId) as { id: string; digest: string; mime_type: string } | undefined;
+  if (!artifact) return {};
+  let imageBytes: Uint8Array | undefined;
+  try {
+    const root = resolve(process.env.UI_INTEL_STORE ?? "./data/artifacts");
+    imageBytes = new Uint8Array(readFileSync(join(root, artifact.digest.slice(0, 2), artifact.digest)));
+    if (imageBytes.length === 0) imageBytes = undefined;
+  } catch {
+    // bytes unavailable: the fetchable URL is the fallback path
+  }
+  const base = (process.env.UI_INTEL_PUBLIC_API_BASE ?? "http://localhost:8787").replace(/\/$/, "");
+  return {
+    ...(imageBytes ? { imageBytes } : {}),
+    imageUrl: `${base}/v1/artifacts/${encodeURIComponent(artifact.id)}/raw?projectId=${encodeURIComponent(projectId)}`,
+    imageMediaType: artifact.mime_type || "image/png",
+  };
+}
+
 export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignReference) => Promise<ProviderReference | null> {
   return async (ref: DesignReference): Promise<ProviderReference | null> => {
     if (ref.kind === "history") {
@@ -424,6 +464,9 @@ export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignRe
         // malformed manifest: proceed without the artifact id
       }
       const head = `${capture.evidence_label} · ${capture.commit_sha.slice(0, 8)}`;
+      // Vision providers also get the screenshot artifact bytes/URL the same
+      // way as image references (audit finding 4).
+      const screenshot = artifactId ? groundArtifactContent(db, projectId, artifactId) : {};
       return {
         kind: "history",
         summary: occurrence
@@ -431,12 +474,18 @@ export function referenceLoader(db: WorkerDb, projectId: string): (ref: DesignRe
           : head,
         text: occurrence?.visible_text ?? undefined,
         ...(artifactId ? { artifactId } : {}),
+        ...screenshot,
       };
     }
     if (ref.kind === "image") {
       const artifact = db.prepare("SELECT id FROM artifacts WHERE project_id = ? AND id = ?").get(projectId, ref.artifactId);
       if (!artifact) return null;
-      return { kind: "image", summary: `design image artifact ${ref.artifactId}`, artifactId: ref.artifactId };
+      return {
+        kind: "image",
+        summary: `design image artifact ${ref.artifactId}`,
+        artifactId: ref.artifactId,
+        ...groundArtifactContent(db, projectId, ref.artifactId),
+      };
     }
     return null;
   };
@@ -452,8 +501,35 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     | undefined;
   if (!proposalRow) throw new Error(`proposal ${proposalId} not found`);
 
-  const request = JSON.parse(proposalRow.request_json as string);
-  const target = JSON.parse(proposalRow.target_json as string) as {
+  const request = JSON.parse(proposalRow.request_json as string) as UiRequest;
+  const targetJson = JSON.parse(proposalRow.target_json as string) as Record<string, unknown>;
+
+  // Page scope (audit finding 4): layout candidates validated against the
+  // page contract with runtime-core's ProposalValidator.validatePageLayout.
+  if (request.target.kind === "page") {
+    const pageContract = targetJson.pageContract as PageContract;
+    const pageValidator = new ProposalValidator(new RendererRegistry());
+    const orchestrator = new ProposalOrchestrator({
+      ...workerOrchestratorBase(db, projectId, provider),
+      validator: new SpecValidator({
+        allowedRepresentations: [...pageContract.allowedLayouts],
+        propertySchemas: {},
+        dataBinding: `page:${pageContract.pageKey}`,
+        allowedActions: [],
+      }),
+      validatePageLayout: (root, contract, entityContracts, readSet, policyVersion) =>
+        pageValidator.validatePageLayout(root, contract, entityContracts, readSet, policyVersion),
+    });
+    const pageResult = await orchestrator.proposePage(request, {
+      pageKey: targetJson.pageKey as string,
+      pageContract,
+      currentReadSet: targetJson.currentReadSet as Parameters<ProposalOrchestrator["proposePage"]>[1]["currentReadSet"],
+    });
+    persistProposalOutcome(db, proposalId, pageResult);
+    return;
+  }
+
+  const target = targetJson as unknown as {
     entityId: string;
     entityKey: string;
     entityVersionId: string;
@@ -475,19 +551,39 @@ export async function handleProposal(db: WorkerDb, job: ClaimedJob, provider?: M
     allowedActions: target.contract.actions,
   });
   const orchestrator = new ProposalOrchestrator({
-    provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
+    ...workerOrchestratorBase(db, projectId, provider),
     validator,
+  });
+
+  const result = await orchestrator.propose(request, target);
+  persistProposalOutcome(db, proposalId, result);
+}
+
+/** Shared orchestrator deps: provider, grounded reference loader, and policy. */
+function workerOrchestratorBase(
+  db: WorkerDb,
+  projectId: string,
+  provider?: ModelProvider
+): Pick<ConstructorParameters<typeof ProposalOrchestrator>[0], "provider" | "loadReference" | "policy"> {
+  return {
+    provider: provider ?? providerFromEnv() ?? new DeterministicProvider(),
     // Ground history/image references into real stored content before the
     // provider sees them (this worker reads the same SQLite store as the API).
     loadReference: referenceLoader(db, projectId),
     policy: { maxCandidates: 4, timeoutMs: 15_000 },
-  });
+  };
+}
 
-  const result = await orchestrator.propose(request, target);
+/** Persist the orchestrator outcome (shared by both scopes). */
+function persistProposalOutcome(
+  db: WorkerDb,
+  proposalId: string,
+  settled: Awaited<ReturnType<ProposalOrchestrator["propose"]>>
+): void {
   db.prepare("UPDATE proposals SET status = ?, candidates_json = ?, failure_json = ?, updated_at = ? WHERE id = ?").run(
-    result.status,
-    result.candidates.length > 0 ? JSON.stringify(result.candidates) : null,
-    result.failure ? JSON.stringify(result.failure) : null,
+    settled.status,
+    settled.candidates.length > 0 ? JSON.stringify(settled.candidates) : null,
+    settled.failure ? JSON.stringify(settled.failure) : null,
     nowIso(),
     proposalId
   );

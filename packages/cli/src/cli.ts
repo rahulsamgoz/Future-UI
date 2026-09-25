@@ -22,7 +22,7 @@ const USAGE = `ui-intelligence CLI
 
 Usage:
   ui-intel init --project <key> --api <baseUrl> --repo <url> [--force]
-  ui-intel history plan --window <6mo|YYYY-MM-DD..YYYY-MM-DD> [--branches main] [--max-builds N] [--scenarios all|id,id] [--offline]
+  ui-intel history plan --window <6mo|YYYY-MM-DD..YYYY-MM-DD> [--branches main] [--max-builds N] [--scenarios all|id,id] [--fixture-repo <path>] [--offline]
   ui-intel history run --plan-id <id>
   ui-intel history submit --repo <url> --commit <sha> --scenarios id1,id2 [--manager <url>] [--project <id>] [--out file]
   ui-intel capture [--scenarios id,id] [--route /] [--out dir] [--url url] [--upload]
@@ -79,6 +79,7 @@ async function cmdHistoryPlan(cwd: string, flags: Record<string, string | boolea
     branches: branches.length > 0 ? branches : ["main"],
     scenarioIds: resolveScenarioIds(flagString(flags, "scenarios")),
     maxBuilds: Number(flagString(flags, "max-builds") ?? "12"),
+    fixtureRepo: flagString(flags, "fixture-repo") || undefined,
   });
   if (flagBool(flags, "offline") || !config) {
     console.log(JSON.stringify(plan, null, 2));

@@ -92,12 +92,6 @@ function buildProposal(
   } as Proposal & { contractVersion: number; dataBindingId: string; actionIds: string[] };
 }
 
-/** Read the stored contract version from a specification record's proposal. */
-function storedContractVersion(spec: { proposal: unknown }): number | undefined {
-  const v = (spec.proposal as { contractVersion?: unknown } | null)?.contractVersion;
-  return typeof v === "number" ? v : undefined;
-}
-
 export class PreferenceService {
   readonly store: PreferenceStore;
   readonly coordinator: OperationCoordinator;
@@ -332,7 +326,17 @@ export class PreferenceService {
     }
   }
 
-  /** Apply one accepted candidate to one target scope. */
+  /**
+   * Apply one accepted candidate to one target scope.
+   *
+   * `readSet` is the CANDIDATE's generation context (audit finding 5): the
+   * read set the alternatives were generated against, carried unchanged on
+   * the candidate object. Acceptance revalidates against THAT revision — an
+   * old candidate whose target moved on (competing writer, device sync)
+   * returns { status: "conflict" } and the live view re-reads the winner,
+   * instead of silently overwriting a newer revision. The store re-checks
+   * the expected revision transactionally in beginApplication.
+   */
   async apply(
     scopeKey: string,
     entityKey: string,
@@ -342,28 +346,12 @@ export class PreferenceService {
   ): Promise<{ status: "active" | "failed" | "conflict"; applicationId?: string; reason?: string }> {
     const scope = PreferenceService.scopeOf(scopeKey);
     const prefKey = this.key(scope, scopeKey);
-    // Ground the proposal's preconditions on the revision the UI currently
-    // DISPLAYS (the live view), never on a fresh store read: a competing
-    // writer (another tab, device sync, bundle import) may have moved the
-    // stored record since the user saw it. The store re-checks this expected
-    // revision transactionally in beginApplication, so an apply built on a
-    // stale view returns { status: "conflict" } instead of overwriting the
-    // newer revision.
-    const displayedRevision = this.active.get(scopeKey)?.revision ?? 0;
-    const groundedReadSet: TargetReadSet = {
-      ...readSet,
-      preferenceRevision: displayedRevision,
-    };
-    // The candidate's real contract identity, data binding, and actions flow
-    // into the stored specification so startup revalidation compares the
-    // stored spec against the CURRENT contract version (a candidate
-    // generated under contractVersion 2 must never be stored as v1).
     const proposal = buildProposal(
       newId("prop"),
       entityKey,
       candidate.representation,
       candidate.properties,
-      groundedReadSet,
+      readSet,
       scope,
       candidate.contractVersion,
       candidate.dataBindingId,
@@ -385,7 +373,7 @@ export class PreferenceService {
         requiredRendererVersions: candidate.requiredRendererVersions,
         contractVersion: candidate.contractVersion,
       },
-      groundedReadSet,
+      readSet,
       {
         ...switcher,
         commit: async () => {
@@ -459,8 +447,10 @@ export class PreferenceService {
       }
 
       // Phase 1: record the pending change with the complete target read set.
-      // Expected revisions come from the LIVE VIEW (what the user saw), not
-      // from a fresh store read — same staleness rule as the single apply.
+      // Expected revisions come from each candidate's GENERATION context
+      // (audit finding 5) — what the user saw when these alternatives were
+      // produced — not from a fresh store read nor from the possibly newer
+      // displayed revision. Same staleness rule as the single apply.
       const proposed: Record<string, { digest: string; requiredRendererVersions: Record<string, number> }> = {};
       for (const p of participants) {
         const scope = PreferenceService.scopeOf(p.scopeKey);
@@ -468,7 +458,7 @@ export class PreferenceService {
         const current = await this.store.getPreference(key);
         participantRecords.push({
           key,
-          previousRevision: this.active.get(p.scopeKey)?.revision ?? 0,
+          previousRevision: p.readSet.preferenceRevision,
           previousDigest: current?.activeSpecificationDigest ?? null,
           proposedDigest: p.candidate.digest,
           contractVersion: p.candidate.contractVersion,
@@ -531,7 +521,7 @@ export class PreferenceService {
       // A stale live view is a CONFLICT (a competing writer moved the store),
       // not a local failure: report it as such and re-read the winning state.
       if (isRevisionConflict(error)) {
-        for (const { key, scopeKey } of prepared) {
+        for (const { key } of prepared) {
           await this.handleRemoteCommit(key);
         }
         return { status: "conflict", applicationId, reason };

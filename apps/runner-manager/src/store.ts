@@ -12,6 +12,7 @@
  *   (it stopped heartbeating; the pool respawns a fresh worker).
  */
 import { newId, UiIntelligenceError } from "@ui-intelligence/protocol";
+import type { ManagedRunProvenance } from "@ui-intelligence/capture";
 import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 
@@ -41,6 +42,8 @@ export type RunRecord = {
   maxAttempts: number;
   error: string | null;
   results: ScenarioResult[] | null;
+  /** Honest commit-binding provenance recorded with the run result (audit finding 3d). */
+  provenance: ManagedRunProvenance | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,6 +70,7 @@ function runFromRow(row: Record<string, unknown>): RunRecord {
     maxAttempts: row.max_attempts as number,
     error: (row.error as string | null) ?? null,
     results: resultJson ? (JSON.parse(resultJson) as { results: ScenarioResult[] }).results : null,
+    provenance: resultJson ? ((JSON.parse(resultJson) as { provenance?: ManagedRunProvenance }).provenance ?? null) : null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -212,6 +216,7 @@ export type CompleteRunInput = {
   leaseToken: string;
   succeeded: boolean;
   results?: ScenarioResult[];
+  provenance?: ManagedRunProvenance;
   error?: string;
 };
 
@@ -237,7 +242,7 @@ export function completeRun(db: Db, runId: string, input: CompleteRunInput): { s
       // Keep the lease token on terminal rows so a replayed complete with the
       // same lease stays idempotent.
       db.prepare("UPDATE runs SET status = 'succeeded', result_json = ?, error = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?").run(
-        JSON.stringify({ results: input.results ?? [] }),
+        JSON.stringify({ results: input.results ?? [], ...(input.provenance ? { provenance: input.provenance } : {}) }),
         now,
         runId
       );

@@ -7,6 +7,13 @@
  * static page, asserting job claimed → running → succeeded with the capture
  * ingested (occurrences present), plus the cancellation path ending cancelled
  * without publishing.
+ *
+ * Browser gating (audit finding 6): the capture path launches real Chromium.
+ * The suite probes browser availability up front and FAILS LOUDLY when
+ * Chromium is missing (e.g. a CI image that forgot `npx playwright install
+ * --with-deps chromium`) — it never silently skips the regression. Constrained
+ * environments without a browser may set UI_INTEL_ALLOW_NO_BROWSER=1 to
+ * explicitly skip the browser-dependent test with a visible reason.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +21,7 @@ import { join } from "node:path";
 import { AddressInfo } from "node:net";
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { TestContext } from "vitest";
 import { buildApp, openDb, migrate, seedDevData, enqueueJob, getJob, REFERENCE_PROJECT_ID } from "@ui-intelligence/api";
 import type { Db } from "@ui-intelligence/api";
 import { executeCaptureJob } from "../src/runner.js";
@@ -21,6 +29,14 @@ import { createLegacyApiDeps, listQueuedCaptureJobs } from "../src/legacy.js";
 import type { CaptureEnvironment, ScenarioRecipe } from "@ui-intelligence/capture";
 
 const TOKEN = "dev-token";
+
+// Browser gate (audit finding 6) lives in @ui-intelligence/capture so every
+// browser-dependent suite shares the same fail-loud diagnostic.
+import {
+  ALLOW_NO_BROWSER_ENV,
+  browserGate,
+  probeChromium,
+} from "@ui-intelligence/capture";
 
 const PAGE_HTML = `<!doctype html>
 <html>
@@ -84,8 +100,20 @@ describe("capture-runner legacy (API) mode", () => {
   let pageBaseUrl: string;
   let pageServer: http.Server;
   let workspaceDir: string;
+  /** Non-null → browser-dependent tests are skipped with this visible reason. */
+  let browserSkipReason: string | null = null;
 
   beforeAll(async () => {
+    // Browser gate (audit finding 6): fail loudly when Chromium is missing,
+    // unless UI_INTEL_ALLOW_NO_BROWSER=1 opts this environment out explicitly.
+    const gate = browserGate(await probeChromium());
+    if (gate.action === "fail") throw new Error(gate.message);
+    if (gate.action === "skip") {
+      browserSkipReason = gate.message;
+      // eslint-disable-next-line no-console
+      console.warn(`[legacy-api] ${gate.message} — browser-dependent tests will be skipped`);
+    }
+
     // Real API on a temp DB.
     workspaceDir = mkdtempSync(join(tmpdir(), "ui-intel-legacy-"));
     db = openDb(join(workspaceDir, "api.sqlite"));
@@ -115,7 +143,12 @@ describe("capture-runner legacy (API) mode", () => {
     }
   });
 
-  it("claims a queued capture job, publishes the capture, and completes with the lease token", async () => {
+  it("claims a queued capture job, publishes the capture, and completes with the lease token", async (ctx: TestContext) => {
+    if (browserSkipReason !== null) {
+      // eslint-disable-next-line no-console
+      console.warn(`[legacy-api] SKIPPED: ${browserSkipReason}`);
+      ctx.skip();
+    }
     const jobId = enqueueJob(db, {
       projectId: REFERENCE_PROJECT_ID,
       kind: "capture",
@@ -202,4 +235,51 @@ describe("capture-runner legacy (API) mode", () => {
     };
     expect(capturesAfter.captures.length).toBe(beforeCount);
   }, 60_000);
+});
+
+describe("browser availability gate (audit finding 6)", () => {
+  it("runs when the probe launch succeeds", () => {
+    const decision = browserGate({ available: true, detail: "launch ok" }, {});
+    expect(decision).toMatchObject({ action: "run" });
+  });
+
+  it("fails loudly and points at the missing install step when Chromium is missing (no env override)", () => {
+    const decision = browserGate(
+      {
+        available: false,
+        detail: "browserType.launch: Executable doesn't exist at ... chromium_headless_shell-1243",
+      },
+      {}
+    );
+    expect(decision.action).toBe("fail");
+    expect(decision.message).toMatch(/playwright install --with-deps chromium/);
+    expect(decision.message).toMatch(/ci\.yml/);
+    expect(decision.message).toMatch(/chromium_headless_shell-1243/);
+  });
+
+  it("skips with an explicit visible reason only under UI_INTEL_ALLOW_NO_BROWSER=1", () => {
+    const decision = browserGate(
+      { available: false, detail: "browserType.launch: Executable doesn't exist" },
+      { UI_INTEL_ALLOW_NO_BROWSER: "1" }
+    );
+    expect(decision).toEqual({
+      action: "skip",
+      message: "browser not installed (UI_INTEL_ALLOW_NO_BROWSER=1)",
+    });
+  });
+
+  it("treats values other than '1' as no opt-out (default stays fail-loud)", () => {
+    const decision = browserGate({ available: false, detail: "missing" }, { UI_INTEL_ALLOW_NO_BROWSER: "true" });
+    expect(decision.action).toBe("fail");
+  });
+
+  it("the real Playwright probe launches Chromium in this environment when a browser is present", async (ctx: TestContext) => {
+    const gate = browserGate(await probeChromium());
+    if (gate.action !== "run") {
+      // eslint-disable-next-line no-console
+      console.warn(`[legacy-api] probe sanity test SKIPPED: ${gate.message}`);
+      ctx.skip();
+    }
+    expect(gate.action).toBe("run");
+  });
 });

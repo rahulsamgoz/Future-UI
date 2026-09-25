@@ -133,9 +133,9 @@ describe("commit selection scoring", () => {
 });
 
 describe("resolveScenarioIds", () => {
-  it("expands 'all' to the six standard scenarios", () => {
-    expect(resolveScenarioIds("all")).toHaveLength(6);
-    expect(resolveScenarioIds(undefined)).toHaveLength(6);
+  it("expands 'all' to the twelve standard scenario recipes (6 named scenarios x 2 viewports)", () => {
+    expect(resolveScenarioIds("all")).toHaveLength(12);
+    expect(resolveScenarioIds(undefined)).toHaveLength(12);
   });
   it("splits explicit ids", () => {
     expect(resolveScenarioIds("catalog-default-desktop,account-error-desktop")).toEqual([

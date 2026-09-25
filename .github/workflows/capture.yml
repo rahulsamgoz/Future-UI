@@ -6,6 +6,16 @@
 # CLI submits + polls the run. Artifacts: the run result and the capture
 # coverage report.
 #
+# Durable publication (audit finding): the managed executors publish every
+# capture to the history API and verify the publication — a scenario is only
+# reported "captured" after its capture is durably stored. The publication
+# target is wired via HISTORY_API_URL / HISTORY_API_TOKEN / HISTORY_API_PROJECT
+# (read by @ui-intelligence/capture's historyApiFromEnv in
+# apps/runner-manager/src/executor.ts and apps/capture-runner/src/managed.ts,
+# and propagated by apps/runner-manager/src/pool.ts to spawned workers).
+# Without it the run would execute captures but publish NOTHING, so the env
+# below is required configuration, not a convenience.
+#
 # Not executed in the dev sandbox (no GitHub runners); YAML validated locally.
 
 on:
@@ -32,6 +42,10 @@ jobs:
       UI_INTEL_DB: /home/runner/work/ui-intelligence.sqlite
       RUNNER_DB: /home/runner/work/runner.sqlite
       UI_INTEL_STORE: /home/runner/work/artifacts
+      # Durable publication target for the managed worker pool (see header).
+      HISTORY_API_URL: http://localhost:8787
+      HISTORY_API_TOKEN: dev-token
+      HISTORY_API_PROJECT: proj_reference_app
     steps:
       - uses: actions/checkout@v4
 
@@ -49,14 +63,35 @@ jobs:
       - name: Install browser for capture workers
         run: npx playwright install --with-deps chromium
 
-      - name: Start api + runner-manager + reference app
+      # Service stack. The DB is the API's embedded SQLite (created/migrated by
+      # apps/api at boot from UI_INTEL_DB), started as part of the API service
+      # process; there is no separate DB daemon in this stack. Every service
+      # runs in the background and the step FAILS if any health endpoint does
+      # not come up — a half-started stack must not reach the submit step.
+      - name: Start services (api + db, runner-manager pool, reference app)
         run: |
-          node apps/api/dist/server.js &
-          env APP_URL=http://localhost:5173 RUNNER_POOL_COUNT=2 node apps/runner-manager/dist/server.js &
-          (cd apps/reference-app && npx vite --port 5173 --strictPort &)
-          for i in $(seq 1 60); do curl -sf http://localhost:8787/health >/dev/null && break; sleep 1; done
-          for i in $(seq 1 60); do curl -sf http://localhost:8900/health >/dev/null && break; sleep 1; done
-          for i in $(seq 1 60); do curl -sf http://localhost:5173 >/dev/null && break; sleep 1; done
+          node apps/api/dist/server.js > api.log 2>&1 &
+          echo $! > api.pid
+          APP_URL=http://localhost:5173 RUNNER_POOL_COUNT=2 node apps/runner-manager/dist/server.js > runner-manager.log 2>&1 &
+          echo $! > runner-manager.pid
+          (cd apps/reference-app && exec npx vite --port 5173 --strictPort) > vite.log 2>&1 &
+          echo $! > vite.pid
+
+          wait_for() {
+            local name="$1" url="$2"
+            for _ in $(seq 1 60); do
+              if curl -sf "$url" > /dev/null; then
+                echo "$name is up: $url"
+                return 0
+              fi
+              sleep 1
+            done
+            echo "::error::$name failed to become healthy at $url"
+            exit 1
+          }
+          wait_for "api" http://localhost:8787/health
+          wait_for "runner-manager" http://localhost:8900/health
+          wait_for "reference-app" http://localhost:5173
 
       - name: Submit the managed capture run
         run: |
@@ -78,7 +113,7 @@ jobs:
             --api http://localhost:8787 \
             --token dev-token \
             --project proj_reference_app \
-            --out coverage-report.json || true
+            --out coverage-report.json
 
       - name: Upload run artifacts
         uses: actions/upload-artifact@v4
@@ -88,3 +123,16 @@ jobs:
             run-result.json
             coverage-report.json
           if-no-files-found: warn
+
+      - name: Stop services
+        if: always()
+        run: |
+          for f in vite.pid runner-manager.pid api.pid; do
+            if [ -f "$f" ]; then
+              kill "$(cat "$f")" 2>/dev/null || true
+              rm -f "$f"
+            fi
+          done
+          for log in api.log runner-manager.log vite.log; do
+            [ -f "$log" ] && { echo "--- $log ---"; tail -50 "$log"; }
+          done

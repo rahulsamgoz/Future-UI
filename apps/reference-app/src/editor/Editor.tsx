@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { DesignReference, JsonValue, LayoutNode, StateAdapter, ValidationReport } from "@ui-intelligence/protocol";
+import type { DesignReference, JsonValue, LayoutNode, PageContract, StateAdapter, TargetReadSet, ValidationReport } from "@ui-intelligence/protocol";
 import { useSelection } from "@ui-intelligence/react";
 import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
 import { createControlledDataProvider, createStubActionBindings } from "@ui-intelligence/renderers";
@@ -64,6 +64,7 @@ export function Editor() {
   const [generating, setGenerating] = useState(false);
   const [previewCandidate, setPreviewCandidate] = useState<LocalCandidate | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const [lastApplicationId, setLastApplicationId] = useState<string | null>(null);
   const [history, setHistory] = useState<Array<{ captureId: string; evidenceLabel: string; commitSha: string; capturedAt: string; summary: string } | string> | null>(null);
   const [instruction, setInstruction] = useState("");
@@ -99,6 +100,7 @@ export function Editor() {
         setCandidates([]);
         setSelectMode(false);
         setStatus(null);
+        setStale(false);
       }
     };
     document.addEventListener("click", handler, true);
@@ -127,14 +129,21 @@ export function Editor() {
    * entity-scope target; poll until terminal. When the API is unreachable
    * (offline dev, tests) fall back to the local generator — candidates are
    * then labeled "offline · local" so the producing path is always visible.
+   *
+   * Every candidate carries its GENERATION context (the preference revision
+   * the live view displayed now, audit finding 5) so acceptance revalidates
+   * against it instead of a fresh read.
    */
   async function generateFor(instance: RuntimeInstanceInfo) {
     setGenerating(true);
     setStatus(null);
+    setStale(false);
     try {
+      const scopeKey = instance.contract.entityKey + (instanceKeyOf(instance) ? `#${instanceKeyOf(instance)}` : "");
+      const generationRevision = preferences.active.get(scopeKey)?.revision ?? 0;
       try {
         const apiCandidates = await proposeViaApi(instance);
-        setCandidates(apiCandidates.map((c) => adaptApiCandidate(c, instance)));
+        setCandidates(apiCandidates.map((c) => adaptApiCandidate(c, instance, generationRevision)));
         if (apiCandidates.length === 0) setStatus("No valid candidates for this target's contract.");
         return;
       } catch (error) {
@@ -146,32 +155,28 @@ export function Editor() {
           ? { kind: "history" as const, summary: `history capture ${r.captureId}` }
           : { kind: "image" as const, summary: `image artifact ${r.artifactId}` }
       );
-      const result = await generator.candidatesFor(instance, instruction, refs, 4);
+      const result = await generator.candidatesFor(instance, instruction, refs, 4, generationRevision);
       setCandidates(result.map((c) => ({ ...c, offline: true, summary: `offline · local — ${c.summary}` })));
     } finally {
       setGenerating(false);
     }
   }
 
-  /** POST the proposal and poll it to a terminal state; throws when unavailable. */
-  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+  /** POST a proposal request and poll it to a terminal state; throws when unavailable. */
+  async function postProposalAndPoll(targetRequest: {
+    target: { kind: "selection"; entityId: string; runtimeInstanceId: string } | { kind: "page"; pageKey: string; pageContract: PageContract };
+    requestedCandidateCount: number;
+  }): Promise<ApiCandidateDto[]> {
     const token = (import.meta.env.VITE_API_TOKEN as string | undefined) ?? "dev-token";
-    // Same-origin /v1 goes through the dev-server proxy; an absolute
-    // VITE_API_BASE overrides it (tests, custom deployments).
     const base = apiBaseUrl ?? "";
     const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
     const request = {
       requestId: `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       operation: "propose_change" as const,
-      target: {
-        kind: "selection" as const,
-        entityId: instance.contract.entityKey,
-        runtimeInstanceId: instance.runtimeInstanceId,
-      },
       references,
       instruction,
       appBuildId: await resolveAppBuildId(base),
-      requestedCandidateCount: 4,
+      ...targetRequest,
     };
     const res = await fetch(
       `${base}/v1/projects/reference-app/proposals?access_token=${encodeURIComponent(token)}`,
@@ -198,8 +203,29 @@ export function Editor() {
     throw new Error("proposal polling timed out");
   }
 
-  /** Map an API candidate onto the LocalCandidate shape used by the editor. */
-  function adaptApiCandidate(candidate: ApiCandidateDto, instance: RuntimeInstanceInfo): LocalCandidate {
+  async function proposeViaApi(instance: RuntimeInstanceInfo): Promise<ApiCandidateDto[]> {
+    return postProposalAndPoll({
+      target: {
+        kind: "selection" as const,
+        entityId: instance.contract.entityKey,
+        runtimeInstanceId: instance.runtimeInstanceId,
+      },
+      requestedCandidateCount: 4,
+    });
+  }
+
+  /**
+   * Map an API candidate onto the LocalCandidate shape used by the editor.
+   * The read set is the API validation's target read set re-grounded on the
+   * generation-time displayed revision (the API does not know client-side
+   * preference revisions) — the candidate's generation context, per audit
+   * finding 5.
+   */
+  function adaptApiCandidate(
+    candidate: ApiCandidateDto,
+    instance: RuntimeInstanceInfo,
+    generationRevision: number
+  ): LocalCandidate {
     const type = candidate.presentation.type;
     const descriptor = kernel.renderers.get(type);
     return {
@@ -216,6 +242,10 @@ export function Editor() {
       contractVersion: instance.contract.contractVersion,
       dataBindingId: candidate.presentation.dataBinding ?? instance.contract.dataBinding,
       actionIds: candidate.presentation.actions ?? [...instance.contract.actions],
+      readSet: {
+        ...candidate.validation.targetReadSet,
+        preferenceRevision: generationRevision,
+      },
     };
   }
 
@@ -229,14 +259,9 @@ export function Editor() {
   async function acceptCandidate(candidate: LocalCandidate) {
     if (!selected) return;
     const scopeKey = selected.contract.entityKey + (instanceKeyOf(selected) ? `#${instanceKeyOf(selected)}` : "");
-    // Ground the read set on the revision the live view currently displays,
-    // so an apply built on a stale view is rejected as a conflict instead of
-    // overwriting a newer revision.
-    const readSet = await kernel.currentReadSet(
-      selected.contract.entityKey,
-      1,
-      preferences.active.get(scopeKey)?.revision ?? 0
-    );
+    // Acceptance revalidates against the candidate's GENERATION context, not
+    // a fresh read (audit finding 5): a candidate whose target moved on
+    // after generation returns a conflict instead of overwriting the winner.
     const result = await preferences.apply(
       scopeKey,
       selected.contract.entityKey,
@@ -250,11 +275,17 @@ export function Editor() {
         actionIds: candidate.actionIds,
       },
       switcherFor(selected),
-      readSet
+      candidate.readSet
     );
     if (result.status === "active" && result.applicationId) {
+      setStale(false);
       setLastApplicationId(result.applicationId);
       setStatus(`Applied ${candidate.representation}.`);
+    } else if (result.status === "conflict") {
+      // The target changed since these alternatives were generated: surface
+      // it and ask for a regeneration instead of applying anything.
+      setStale(true);
+      setStatus("Could not apply: the target changed since these alternatives were generated.");
     } else {
       setStatus(`Could not apply: ${result.reason ?? result.status}`);
     }
@@ -293,29 +324,28 @@ export function Editor() {
     for (const instance of batchTargets) {
       const contract = instance.contract;
       if (!contract.allowedRepresentations.includes("button.compact@1")) continue;
+      const instanceKey = instanceKeyOf(instance);
+      const scopeKey = instanceKey ? `${contract.entityKey}#${instanceKey}` : contract.entityKey;
+      const generationRevision = preferences.active.get(scopeKey)?.revision ?? 0;
       // The batch path goes through the SAME validation and content digest
-      // as generated candidates — never bypass the validator.
+      // as generated candidates — never bypass the validator. The candidate
+      // carries its generation read set (audit finding 5).
       const candidate = await validatedCandidate(
         kernel,
         instance,
         "button.compact@1",
         { variant: "compact" },
         "generated",
-        "Compact button variant"
+        "Compact button variant",
+        generationRevision
       );
       if (!candidate) continue;
-      const instanceKey = instanceKeyOf(instance);
-      const scopeKey = instanceKey ? `${contract.entityKey}#${instanceKey}` : contract.entityKey;
       participants.push({
         scopeKey,
         entityKey: contract.entityKey,
         candidate,
         switcher: switcherFor(instance),
-        readSet: await kernel.currentReadSet(
-          contract.entityKey,
-          1,
-          preferences.active.get(scopeKey)?.revision ?? 0
-        ),
+        readSet: candidate.readSet,
       });
     }
     if (participants.length === 0) {
@@ -333,23 +363,91 @@ export function Editor() {
 
   // --- Page composition ---
   const pageKey = typeof window !== "undefined" && window.location.hash.startsWith("#/account") ? "account" : "catalog";
-  const [layoutCandidates, setLayoutCandidates] = useState<Array<{ layout: LayoutNode; validation: { passed: boolean } }>>([]);
-  const [previewLayout, setPreviewLayout] = useState<LayoutNode | null>(null);
+  type PageLayoutCandidate = {
+    layout: LayoutNode;
+    validation: { passed: boolean };
+    readSet: TargetReadSet;
+    /** True when the layout came from the offline local enumeration, not the API. */
+    offline: boolean;
+  };
+  const [layoutCandidates, setLayoutCandidates] = useState<PageLayoutCandidate[]>([]);
+  const [previewLayout, setPreviewLayout] = useState<PageLayoutCandidate | null>(null);
+  const [pageScopeNote, setPageScopeNote] = useState<string | null>(null);
+  const [generatingLayouts, setGeneratingLayouts] = useState(false);
 
+  /**
+   * Reference-guided page generation (audit finding 4): the Page tab calls
+   * the proposal API with a PAGE-scope target + instruction + staged
+   * references; the API's provider proposes layout candidates constrained by
+   * the page contract and the orchestrator validates them with
+   * ProposalValidator.validatePageLayout. When the API is unreachable the
+   * editor falls back to the local layout enumeration, clearly labeled.
+   */
   async function generateLayouts() {
     const contracts = await import("../contracts.js");
     const pageContract =
       pageKey === "account" ? contracts.accountPageContract : contracts.catalogPageContract;
     const entityContracts = new Map(contracts.allEntityContracts.map((c) => [c.entityKey, c]));
-    const currentLayout: LayoutNode = previewLayout ?? defaultLayoutFor(pageKey);
-    const result = await generator.layoutCandidatesFor(pageContract, entityContracts, currentLayout, 3);
-    setLayoutCandidates(result.filter((r) => r.validation.passed));
+    const currentLayout: LayoutNode = previewLayout?.layout ?? defaultLayoutFor(pageKey);
+    setGeneratingLayouts(true);
+    setStatus(null);
+    try {
+      const generationRevision = preferences.active.get(`page:${pageKey}`)?.revision ?? 0;
+      try {
+        const apiCandidates = await proposePageViaApi(pageKey, pageContract);
+        setLayoutCandidates(
+          apiCandidates.map((c) => ({
+            layout: c.presentation as unknown as LayoutNode,
+            validation: c.validation,
+            readSet: { ...c.validation.targetReadSet, preferenceRevision: generationRevision },
+            offline: false,
+          }))
+        );
+        setPageScopeNote(
+          apiCandidates.length > 0
+            ? "API page-scope generation — layout candidates validated against the page contract."
+            : "API page-scope generation returned no valid layout candidates."
+        );
+        if (apiCandidates.length === 0) setStatus("No valid layout candidates for this page contract.");
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`API page proposals unavailable (${message}) — showing offline local layouts.`);
+      }
+      const result = await generator.layoutCandidatesFor(
+        pageContract,
+        entityContracts,
+        currentLayout,
+        3,
+        generationRevision
+      );
+      setLayoutCandidates(
+        result
+          .filter((r) => r.validation.passed)
+          .map((r) => ({ ...r, offline: true }))
+      );
+      setPageScopeNote(
+        "Local layout suggestions — API page-scope generation not configured (the proposal API supports entity-scope selection targets only)."
+      );
+    } finally {
+      setGeneratingLayouts(false);
+    }
   }
 
-  async function acceptLayout(layout: LayoutNode) {
+  async function proposePageViaApi(key: string, pageContract: PageContract): Promise<ApiCandidateDto[]> {
+    return postProposalAndPoll({
+      target: { kind: "page" as const, pageKey: key, pageContract },
+      requestedCandidateCount: 3,
+    });
+  }
+
+  async function acceptLayout(candidate: PageLayoutCandidate) {
+    const layout = candidate.layout;
     // Digest covers the ENTIRE layout tree (canonical JSON), not just the
     // root type — structurally different layouts must not share a digest.
     const layoutDigest = await digestOf(layout);
+    // Acceptance revalidates against the candidate's generation context
+    // (audit finding 5), never a fresh read.
     const result = await preferences.apply(
       `page:${pageKey}`,
       `page:${pageKey}`,
@@ -369,15 +467,13 @@ export function Editor() {
         importState: () => {},
         commit: async () => {},
       },
-      await kernel.currentReadSet(
-        pageKey,
-        1,
-        preferences.active.get(`page:${pageKey}`)?.revision ?? 0
-      )
+      candidate.readSet
     );
     if (result.status === "active" && result.applicationId) {
       setLastApplicationId(result.applicationId);
       setStatus(`Page layout applied (${layout.kind === "layout" ? layout.type : "region"}).`);
+    } else if (result.status === "conflict") {
+      setStatus("Could not apply layout: the page changed since these alternatives were generated.");
     } else {
       setStatus(`Could not apply layout: ${result.reason ?? result.status}`);
     }
@@ -563,6 +659,11 @@ export function Editor() {
                     {generating ? "Generating…" : "Show alternatives"}
                   </button>
                   {generating && <div className="muted small" data-testid="generate-spinner">Waiting for the proposal service…</div>}
+                  {stale && (
+                    <div className="muted small" data-testid="stale-candidates" role="alert">
+                      Target changed since these alternatives were generated — regenerate.
+                    </div>
+                  )}
                   <ul className="candidate-list">
                     {candidates.map((c) => (
                       <li key={c.candidateId} className="candidate" data-testid="candidate">
@@ -607,17 +708,29 @@ export function Editor() {
             <div>
               <p className="muted small">Page composition for <strong>{pageKey}</strong>. Locked and required slots are preserved.</p>
               <p className="muted small" data-testid="page-scope-note">
-                Local layout suggestions — API page-scope generation not configured (the proposal API supports
-                entity-scope selection targets only).
+                {pageScopeNote ??
+                  "Press Show layouts to generate layout candidates (API page-scope generation with local offline fallback)."}
               </p>
-              <button className="btn primary" onClick={() => void generateLayouts()} data-testid="generate-layouts">Show layouts</button>
+              <input
+                className="instruction-input"
+                data-testid="page-instruction"
+                placeholder="Describe the page change (optional)"
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+              />{" "}
+              <button className="btn primary" onClick={() => void generateLayouts()} disabled={generatingLayouts} data-testid="generate-layouts">
+                {generatingLayouts ? "Generating…" : "Show layouts"}
+              </button>
               <ul className="candidate-list">
                 {layoutCandidates.map((l, i) => (
-                  <li key={i} className="candidate">
-                    <div className="candidate-head"><strong>{l.layout.kind === "layout" ? l.layout.type : "region"}</strong></div>
+                  <li key={i} className="candidate" data-testid="page-candidate">
+                    <div className="candidate-head">
+                      <strong>{l.layout.kind === "layout" ? l.layout.type : "region"}</strong>
+                      {l.offline && <span className="origin origin-offline" data-testid="page-offline-badge">offline · local</span>}
+                    </div>
                     <div className="candidate-actions">
-                      <button className="btn small" onClick={() => setPreviewLayout(l.layout)}>Preview</button>
-                      <button className="btn small primary" onClick={() => void acceptLayout(l.layout)}>Accept</button>
+                      <button className="btn small" onClick={() => setPreviewLayout(l)}>Preview</button>
+                      <button className="btn small primary" onClick={() => void acceptLayout(l)} data-testid="accept-layout">Accept</button>
                     </div>
                   </li>
                 ))}
@@ -708,15 +821,15 @@ export function Editor() {
         <div className="preview-overlay" role="dialog" aria-label="Layout preview" data-testid="layout-preview-overlay">
           <div className="preview-card wide">
             <header className="preview-header">
-              <strong>Layout preview — {previewLayout.kind === "layout" ? previewLayout.type : "region"}</strong>
+              <strong>Layout preview — {previewLayout.layout.kind === "layout" ? previewLayout.layout.type : "region"}</strong>
               <button className="icon-btn" onClick={() => setPreviewLayout(null)} aria-label="Close preview">✕</button>
             </header>
             <p className="muted small">Layout shape only; regions render their current content.</p>
             <div className="preview-stage">
-              <LayoutPreviewShape layout={previewLayout} />
+              <LayoutPreviewShape layout={previewLayout.layout} />
             </div>
             <footer>
-              <button className="btn primary" onClick={() => { void acceptLayout(previewLayout); setPreviewLayout(null); }}>Accept</button>
+              <button className="btn primary" onClick={() => { void acceptLayout(previewLayout); setPreviewLayout(null); }} data-testid="preview-accept-layout">Accept</button>
               <button className="btn" onClick={() => setPreviewLayout(null)}>Close</button>
             </footer>
           </div>

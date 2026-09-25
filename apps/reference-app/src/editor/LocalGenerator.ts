@@ -4,6 +4,7 @@ import type {
   LayoutNode,
   PageContract,
   Presentation,
+  TargetReadSet,
   ValidationReport,
 } from "@ui-intelligence/protocol";
 import type { RendererDescriptor, RuntimeKernel } from "@ui-intelligence/runtime-core";
@@ -15,6 +16,9 @@ import type { RuntimeInstanceInfo } from "@ui-intelligence/runtime-core";
  * Build ONE validated, content-digested candidate for a specific
  * representation (used by the batch path so it goes through the same
  * validation as generated candidates — never bypass the validator).
+ * `preferenceRevision` is the revision the live view displayed at GENERATION
+ * time (audit finding 5): the candidate carries it as its read set and the
+ * acceptance path revalidates against it instead of a fresh read.
  */
 export async function validatedCandidate(
   kernel: RuntimeKernel,
@@ -22,14 +26,15 @@ export async function validatedCandidate(
   representation: string,
   properties: Record<string, JsonValue>,
   originKind: LocalCandidate["originKind"] = "generated",
-  summary = `${representation} variant`
+  summary = `${representation} variant`,
+  preferenceRevision = 0
 ): Promise<LocalCandidate | null> {
   const contract = instance.contract;
   if (!contract.allowedRepresentations.includes(representation)) return null;
   const descriptor = kernel.renderers.get(representation);
   if (!descriptor) return null;
   const validator = new ProposalValidator(kernel.renderers);
-  const readSet = await kernel.currentReadSet(contract.entityKey, 1);
+  const readSet = await kernel.currentReadSet(contract.entityKey, 1, preferenceRevision);
   const presentation: Presentation = {
     type: representation,
     properties,
@@ -50,6 +55,7 @@ export async function validatedCandidate(
     contractVersion: contract.contractVersion,
     dataBindingId: contract.dataBinding,
     actionIds: contract.actions,
+    readSet,
   };
 }
 
@@ -65,6 +71,12 @@ export type LocalCandidate = {
   contractVersion: number;
   dataBindingId: string;
   actionIds: string[];
+  /**
+   * The read set the candidate was GENERATED against (audit finding 5):
+   * acceptance revalidates against THIS revision, so an old candidate whose
+   * target moved returns a conflict instead of overwriting a newer write.
+   */
+  readSet: TargetReadSet;
   /** True when the candidate came from the offline local fallback, not the API. */
   offline?: boolean;
 };
@@ -86,12 +98,17 @@ export class LocalGenerator {
       .map((d) => ({ id: d.id, propertySchema: d.propertySchema }));
   }
 
-  /** Generate up to `count` diverse, validated candidates for an entity target. */
+  /**
+   * Generate up to `count` diverse, validated candidates for an entity target.
+   * `preferenceRevision` is what the live view displayed at generation time
+   * (audit finding 5) and is carried on every candidate as its read set.
+   */
   async candidatesFor(
     instance: RuntimeInstanceInfo,
     instruction: string,
     references: Array<{ kind: "history" | "image" | "text"; summary: string }> = [],
-    count = 4
+    count = 4,
+    preferenceRevision = 0
   ): Promise<LocalCandidate[]> {
     const contract = instance.contract;
     const output = await this.provider.generate({
@@ -109,7 +126,7 @@ export class LocalGenerator {
     });
 
     const validator = new ProposalValidator(this.kernel.renderers);
-    const readSet = await this.kernel.currentReadSet(contract.entityKey, 1);
+    const readSet = await this.kernel.currentReadSet(contract.entityKey, 1, preferenceRevision);
     const candidates: LocalCandidate[] = [];
     for (const c of output.candidates) {
       const presentation: Presentation = {
@@ -133,18 +150,24 @@ export class LocalGenerator {
         contractVersion: contract.contractVersion,
         dataBindingId: contract.dataBinding,
         actionIds: contract.actions,
+        readSet,
       });
     }
     return candidates;
   }
 
-  /** Generate validated page layout candidates respecting locked/required slots. */
+  /**
+   * Generate validated page layout candidates respecting locked/required
+   * slots. `preferenceRevision` is what the live view displayed at generation
+   * time (audit finding 5); each result carries its generation read set.
+   */
   async layoutCandidatesFor(
     pageContract: PageContract,
     entityContracts: Map<string, EntityContract>,
     currentLayout: LayoutNode,
-    count = 3
-  ): Promise<Array<{ layout: LayoutNode; validation: ValidationReport }>> {
+    count = 3,
+    preferenceRevision = 0
+  ): Promise<Array<{ layout: LayoutNode; validation: ValidationReport; readSet: TargetReadSet }>> {
     const layouts: LayoutNode[] = [];
     const regions = (n: LayoutNode): Array<Extract<LayoutNode, { kind: "region" }>> =>
       n.kind === "region" ? [n] : n.children.flatMap(regions);
@@ -172,11 +195,11 @@ export class LocalGenerator {
     }
 
     const validator = new ProposalValidator(this.kernel.renderers);
-    const readSet = await this.kernel.currentReadSet(pageContract.pageKey, 1);
-    const out: Array<{ layout: LayoutNode; validation: ValidationReport }> = [];
+    const readSet = await this.kernel.currentReadSet(pageContract.pageKey, 1, preferenceRevision);
+    const out: Array<{ layout: LayoutNode; validation: ValidationReport; readSet: TargetReadSet }> = [];
     for (const layout of layouts) {
       const validation = await validator.validatePageLayout(layout, pageContract, entityContracts, readSet, 1);
-      out.push({ layout, validation });
+      out.push({ layout, validation, readSet });
     }
     return out;
   }

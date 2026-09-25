@@ -20,9 +20,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Audit finding 6: capture-runner tests execute the REAL capture path and
+      # need Playwright's Chromium (previously missing → "Executable doesn't
+      # exist ... chromium_headless_shell-1243" on main). Installed AFTER
+      # `npm ci` so npx resolves the workspace's pinned playwright version.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Typecheck (workspace build)
         run: npx tsc -b
 
+      # UI_INTEL_E2E unset keeps the suite hermetic; the capture regression in
+      # apps/capture-runner/test/legacy-api.test.ts fails loudly (no silent
+      # skip) if Chromium is unavailable.
       - name: Unit tests (hermetic — UI_INTEL_E2E unset)
         run: npx vitest run
         env:

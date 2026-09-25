@@ -76,7 +76,18 @@ function elementsAt(sha: string): LineageSide {
 }
 
 /** Ground-truth expectations implied by the fixture's own commit labels. */
-const CONTINUING_ANCHORS = ["catalog.page", "catalog.productChooser", "catalog.productCard"];
+// The catalog page and the account route (profile form + save button) continue
+// through every commit; the account admin panel boundary exists from the split
+// commit (8) onward.
+const CONTINUING_ANCHORS = [
+  "catalog.page",
+  "catalog.productChooser",
+  "catalog.productCard",
+  "account.page",
+  "account.profileForm",
+  "ui.primaryButton",
+];
+const ADMIN_PANEL_FROM_PAIR = 8; // adminPanel first appears IN commit 8, so it continues from pair 8 onward
 const PAIRS = 12; // 13 commits -> 12 consecutive pairs
 
 function buildExpectations(): Array<{ pair: number; relation: string; from: string; to: string }> {
@@ -85,6 +96,9 @@ function buildExpectations(): Array<{ pair: number; relation: string; from: stri
     for (const anchor of CONTINUING_ANCHORS) {
       expectations.push({ pair, relation: "continues_as", from: anchor, to: anchor });
     }
+  }
+  for (let pair = ADMIN_PANEL_FROM_PAIR; pair <= PAIRS; pair += 1) {
+    expectations.push({ pair, relation: "continues_as", from: "account.adminPanel", to: "account.adminPanel" });
   }
   // Commit 8 label: "split: product chooser splits into chooser + sort control".
   expectations.push({ pair: 7, relation: "split_into", from: "catalog.productChooser", to: "catalog.sortControl" });

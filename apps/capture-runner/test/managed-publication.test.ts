@@ -86,10 +86,13 @@ function fakeRunner() {
   };
 }
 
-/** fetch stub that answers the two publication-verification GETs. */
-function fakeVerifyFetch() {
+/** fetch stub that answers the app-page digest GET and the two publication-verification GETs. */
+function fakeVerifyFetch(appHtml = "<html>fixture-app</html>") {
   return vi.fn(async (url: string | URL) => {
     const href = url.toString();
+    if (href.startsWith("http://app.local")) {
+      return new Response(appHtml, { status: 200 });
+    }
     if (href.includes("/captures/")) {
       return new Response(JSON.stringify({ manifest: { observations: [{}, {}] } }), { status: 200 });
     }
@@ -110,12 +113,12 @@ const INPUT = {
 };
 
 describe("managed executor durable publication", () => {
-  it("uploads + verifies every capture and reports the real captureId + artifactId", async () => {
+  it("uploads + verifies every capture and reports the real captureId + artifactId, with honest live-app provenance", async () => {
     const runner = fakeRunner();
     const fetch = fakeVerifyFetch();
     const uploader = { upload: vi.fn(async (manifest: CaptureManifest) => ({ captureId: manifest.captureId })) };
 
-    const { results } = await executeRunScenarios(
+    const { results, provenance } = await executeRunScenarios(
       ["catalog-default-desktop", "catalog-default-mobile"],
       INPUT,
       { runner, uploader, fetch },
@@ -135,6 +138,16 @@ describe("managed executor durable publication", () => {
       expect(result.artifactId).toBe(`artifact_${result.captureId}`);
       expect(result.error).toBeUndefined();
     }
+
+    // Honest provenance (audit finding 3d): remote repoUrl -> live-app mode
+    // with the commit binding explicitly NOT verified.
+    expect(provenance?.mode).toBe("live-app");
+    expect(provenance?.note).toContain("asserted, not verified");
+    // buildArtifactDigest comes from the served page's first response HTML,
+    // never the old constant "runner-managed".
+    const spec = runner.execute.mock.calls[0]?.[1] as { buildArtifactDigest: string };
+    expect(spec.buildArtifactDigest).not.toBe("runner-managed");
+    expect(spec.buildArtifactDigest).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("reports the scenario failed when publication (upload) fails", async () => {
@@ -158,9 +171,12 @@ describe("managed executor durable publication", () => {
 
   it("reports the scenario failed when publication cannot be verified", async () => {
     const runner = fakeRunner();
-    // Verification answers 404 for the capture GET: the capture is not
-    // retrievable, so publication failed.
-    const fetch = vi.fn(async () => new Response("not found", { status: 404 }));
+    // The app page is readable (digest succeeds) but verification answers 404
+    // for the capture GET: the capture is not retrievable, so publication failed.
+    const fetch = vi.fn(async (url: string | URL) => {
+      if (String(url).startsWith("http://app.local")) return new Response("<html>fixture-app</html>", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
     const uploader = { upload: vi.fn(async (manifest: CaptureManifest) => ({ captureId: manifest.captureId })) };
 
     const { results } = await executeRunScenarios(["catalog-default-desktop"], INPUT, { runner, uploader, fetch });
@@ -170,18 +186,52 @@ describe("managed executor durable publication", () => {
   });
 
   it("never reports captured without a configured history API", async () => {
-    const runner = fakeRunner();
-    const fetch = fakeVerifyFetch();
-    const uploader = { upload: vi.fn(async () => ({ captureId: "never_used" })) };
+    // Hermetic: the env fallback must not rescue this test from a developer
+    // shell that happens to export HISTORY_API_URL.
+    vi.stubEnv("HISTORY_API_URL", "");
+    try {
+      const runner = fakeRunner();
+      const fetch = fakeVerifyFetch();
+      const uploader = { upload: vi.fn(async () => ({ captureId: "never_used" })) };
 
-    const { results } = await executeRunScenarios(
-      ["catalog-default-desktop"],
-      { ...INPUT, historyApi: undefined },
-      { runner, uploader, fetch },
-    );
+      const { results } = await executeRunScenarios(
+        ["catalog-default-desktop"],
+        { ...INPUT, historyApi: undefined },
+        { runner, uploader, fetch },
+      );
 
-    expect(results[0]?.status).toBe("failed");
-    expect(results[0]?.error).toContain("history API not configured");
-    expect(uploader.upload).not.toHaveBeenCalled();
+      expect(results[0]?.status).toBe("failed");
+      expect(results[0]?.error).toContain("history API not configured");
+      expect(uploader.upload).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("falls back to HISTORY_API_* env when no historyApi is injected (closure review: child worker mode)", async () => {
+    // Child capture-runner processes spawned by the runner-manager pool get no
+    // injected historyApi — the env fallback is their ONLY publication path.
+    vi.stubEnv("HISTORY_API_URL", "http://env-history.local");
+    vi.stubEnv("HISTORY_API_TOKEN", "env-token");
+    vi.stubEnv("HISTORY_API_PROJECT", "proj_env");
+    try {
+      const runner = fakeRunner();
+      const fetch = fakeVerifyFetch();
+      const uploader = { upload: vi.fn(async (manifest: CaptureManifest) => ({ captureId: manifest.captureId })) };
+
+      const { results } = await executeRunScenarios(
+        ["catalog-default-desktop"],
+        { ...INPUT, historyApi: undefined },
+        { runner, uploader, fetch },
+      );
+
+      expect(results[0]?.status).toBe("captured");
+      // Publication verification went to the ENV-derived API base URL.
+      const envCalls = fetch.mock.calls.map((c) => String(c[0])).filter((href) => href.startsWith("http://env-history.local"));
+      expect(envCalls.some((href) => href.includes("/captures/"))).toBe(true);
+      expect(envCalls.some((href) => href.includes("projectId=proj_env") || href.includes("/projects/proj_env/"))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

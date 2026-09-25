@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { UiRuntimeProvider } from "@ui-intelligence/react";
 import { ServicesContext, type AppServices } from "./Services.js";
 import { createAppKernel } from "./kernel.js";
@@ -36,17 +36,20 @@ function useHashRoute(): string {
 }
 
 export function App() {
-  const [services, setServices] = useState<AppServices | null>(null);
+  const parentServices = useContext(ServicesContext);
+  const [services, setServices] = useState<AppServices | null>(parentServices ?? null);
   const hash = useHashRoute();
 
-  const cart = useMemo(() => createCart(), []);
+  const localCart = useMemo(() => createCart(), []);
   // Re-render the chrome when the cart changes (the badge shows current count).
+  const cart = services?.cart ?? localCart;
   useSyncExternalStore(
     cart.subscribe,
     () => cart.count
   );
 
   useEffect(() => {
+    if (parentServices) return;
     let cancelled = false;
     let preferences: PreferenceService | null = null;
     async function boot() {
@@ -79,7 +82,11 @@ export function App() {
       // Close the cross-tab broadcast channel on unmount.
       preferences?.dispose();
     };
-  }, [cart]);
+    // `cart` (services?.cart ?? localCart) is identity-stable: boot assigns the
+    // same localCart instance into services, and parent providers supply one
+    // fixed instance. Do NOT construct a new cart per render — the effect
+    // depends on it and would re-boot in a loop.
+  }, [cart, parentServices]);
 
   if (!services) {
     return <div className="boot">Loading…</div>;

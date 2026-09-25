@@ -42,7 +42,40 @@ export type ProviderReference = {
    * text-only space-bunny-free model) never requires it and stays default.
    */
   url?: string;
+  /**
+   * Grounded artifact BYTES (audit finding 4): the reference loader reads the
+   * object store so vision providers can be given a base64 data URL directly
+   * — bytes-first, no network fetch by the provider is needed. Absent when
+   * no object store is available to the loader.
+   */
+  imageBytes?: Uint8Array;
+  /**
+   * Fetchable URL for the grounded artifact (audit finding 4): the loader
+   * builds it from the raw artifact endpoint plus the configured external
+   * API base (UI_INTEL_PUBLIC_API_BASE), because external providers need an
+   * absolute URL. Used only when `imageBytes` is absent.
+   */
+  imageUrl?: string;
+  /** Media type of imageBytes/imageUrl (default "image/png"). */
+  imageMediaType?: string;
 };
+
+/**
+ * True when a reference carries image content a vision provider can attach —
+ * the exact conditions the OpenAI-compatible provider's vision path uses
+ * (bytes first, then fetchable imageUrl, then the legacy `url` for image
+ * refs). Shared by the orchestrator's degraded-note accounting so a dropped
+ * image is never under-counted (closure review).
+ */
+export function referenceHasImageContent(reference: ProviderReference): boolean {
+  if ((reference.imageBytes?.length ?? 0) > 0) return true;
+  if (typeof reference.imageUrl === "string" && reference.imageUrl.length > 0) return true;
+  return (
+    reference.kind === "image" &&
+    typeof reference.url === "string" &&
+    reference.url.length > 0
+  );
+}
 
 export type ProviderInput = {
   instruction: string;
@@ -70,5 +103,12 @@ export type ProviderOutput = {
 
 export interface ModelProvider {
   readonly id: string;
+  /**
+   * Declared capabilities (optional; undeclared = text-only). The
+   * orchestrator reads this to surface an honest "N image references
+   * ignored: provider not vision-capable" note instead of silently dropping
+   * image references (audit finding 4).
+   */
+  readonly capabilities?: { vision?: boolean };
   generate(input: ProviderInput): Promise<ProviderOutput>;
 }
