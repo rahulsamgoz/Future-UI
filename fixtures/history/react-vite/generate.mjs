@@ -9,7 +9,7 @@
  * Usage: node fixtures/history/react-vite/generate.mjs [outputDir]
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -148,11 +148,15 @@ const historyManifest = () => `{
 }
 `;
 
-// Commit 1: initial React+Vite app
+// Commit 1: initial React+Vite app. The lockfile makes the manifest's
+// reproducible `npm ci` possible without generation-time network access: it
+// is a tracked skeleton (fixtures/history/react-vite/package-lock.skeleton.json)
+// captured from a real `npm install` of this exact package.json.
 commit("initial react vite app", {
   ".gitignore": gitignore(),
   "index.html": indexHtml("initial react vite app"),
   "package.json": packageJson(),
+  "package-lock.json": readFileSync(path.join(scriptDir, "package-lock.skeleton.json"), "utf8"),
   "vite.config.ts": viteConfig(),
   "tsconfig.json": tsConfig(),
   "ui-intel.history.json": historyManifest(),
