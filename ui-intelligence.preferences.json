@@ -1,0 +1,30 @@
+{
+  "formatVersion": 1,
+  "defaults": [
+    {
+      "entityKey": "catalog.productChooser",
+      "scope": "entity",
+      "scopeKey": "catalog.productChooser",
+      "representation": "grid@1",
+      "properties": {
+        "columns": 3,
+        "density": "compact"
+      },
+      "contractVersion": 1,
+      "requiredRendererVersions": {
+        "carousel@1": 1,
+        "grid@1": 1,
+        "table@1": 1,
+        "select@1": 1,
+        "button-group@1": 1,
+        "form@1": 1,
+        "card@1": 1
+      }
+    }
+  ],
+  "provenance": {
+    "proposalId": "proposal_cbcf351caf484f83bb3fe239",
+    "acceptedAt": "2026-09-25T00:25:08.159Z",
+    "tool": "ui-intel handoff"
+  }
+}
