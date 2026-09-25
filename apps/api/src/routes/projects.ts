@@ -143,6 +143,7 @@ export async function historyPlanRoutes(app: FastifyInstance, deps: { db: Db }):
     // job payload so the history_scan worker sees a repo path and can actually
     // reconstruct the selected commits (worker handleHistoryScan reads it from
     // the payload first, then from the plan input).
+    // GAP A fix: also carry scenarioIds so the worker uses exactly the selected set.
     const jobId = enqueueJob(db, {
       projectId,
       kind: "history_scan",
@@ -150,6 +151,7 @@ export async function historyPlanRoutes(app: FastifyInstance, deps: { db: Db }):
         planId,
         projectId,
         ...(plan.input.fixtureRepo ? { fixtureRepo: plan.input.fixtureRepo } : {}),
+        ...(plan.input.scenarioIds && plan.input.scenarioIds.length > 0 ? { scenarioIds: plan.input.scenarioIds } : {}),
       },
       dedupKey: `history_scan:${planId}`,
       stage: "planning",

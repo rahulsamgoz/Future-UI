@@ -93,6 +93,31 @@ describe("history plan fixtureRepo end to end (audit finding 3a)", () => {
     expect(without.statusCode).toBe(201);
   });
 
+  it("rejects unknown scenarioIds with 422 and defaults empty to all standard scenarios", async () => {
+    const unknown = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
+      input: input({ scenarioIds: ["catalog-desktop-signed-in"] }),
+    });
+    expect(unknown.statusCode).toBe(422);
+    expect(JSON.parse(unknown.body).error.code).toBe("SCHEMA_INVALID");
+    expect(JSON.parse(unknown.body).error.message).toContain("unknown scenarioIds");
+
+    // Empty scenarioIds defaults to all 12 standard scenarios.
+    const all = await post(app, `/v1/projects/${PROJECT}/history-plans`, { input: input({ scenarioIds: [] }) });
+    expect(all.statusCode).toBe(201);
+    const allBody = JSON.parse(all.body);
+    expect(allBody.input.scenarioIds.length).toBe(12);
+    expect(allBody.estimatedCaptures).toBe(allBody.selectedCommits.length * 12 * 2);
+
+    // Explicit subset is accepted and estimated correctly.
+    const subset = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
+      input: input({ scenarioIds: ["catalog-default-desktop", "account-default-desktop"] }),
+    });
+    expect(subset.statusCode).toBe(201);
+    const subsetBody = JSON.parse(subset.body);
+    expect(subsetBody.input.scenarioIds).toEqual(["catalog-default-desktop", "account-default-desktop"]);
+    expect(subsetBody.estimatedCaptures).toBe(subsetBody.selectedCommits.length * 2 * 2);
+  });
+
   browserIt("reconstructs the selected commit through the real worker path (captures carry that commit sha)", { timeout: 300_000 }, async () => {
     // Register the fixture commits so the plan can select them.
     const log = execFileSync("git", ["-C", corpusDir, "log", "--reverse", "--format=%H %cI"], {

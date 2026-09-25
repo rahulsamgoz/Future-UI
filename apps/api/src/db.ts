@@ -25,6 +25,17 @@ export function openDb(path: string): Db {
 export function migrate(db: Db): void {
   db.exec(SCHEMA_SQL)
   db.exec(AUTH_SCHEMA_SQL);
+  // Graceful migration: add degraded_json to proposals if the table was created
+  // before this column existed (closure-2 GAP B). SQLite has no IF NOT EXISTS
+  // for ADD COLUMN, so we probe table_info and ignore the expected duplicate error.
+  const hasDegraded = db.prepare("SELECT name FROM pragma_table_info('proposals') WHERE name = 'degraded_json'").get() as { name: string } | undefined;
+  if (!hasDegraded) {
+    try {
+      db.exec("ALTER TABLE proposals ADD COLUMN degraded_json TEXT");
+    } catch {
+      // best effort — another process may have raced the ALTER
+    }
+  }
 }
 
 export function getJson<T>(row: unknown, column: string): T | null {

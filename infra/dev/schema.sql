@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS proposals (
   status TEXT NOT NULL,
   candidates_json TEXT,
   failure_json TEXT,
+  degraded_json TEXT,
   accepted_candidate_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

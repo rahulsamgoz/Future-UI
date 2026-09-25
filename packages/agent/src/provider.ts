@@ -50,10 +50,12 @@ export type ProviderReference = {
    */
   imageBytes?: Uint8Array;
   /**
-   * Fetchable URL for the grounded artifact (audit finding 4): the loader
-   * builds it from the raw artifact endpoint plus the configured external
-   * API base (UI_INTEL_PUBLIC_API_BASE), because external providers need an
-   * absolute URL. Used only when `imageBytes` is absent.
+   * Fetchable URL for the grounded artifact (closure-2 GAP A): previously
+   * populated with the auth-gated `/v1/artifacts/:id/raw` endpoint, but
+   * external model providers fetch WITHOUT credentials and receive 401, making
+   * the URL unusable. The field is kept in the type for a future short-lived
+   * signed-URL fallback, but for now bytes-first is the only supported
+   * delivery mechanism and this field is NOT populated by the reference loader.
    */
   imageUrl?: string;
   /** Media type of imageBytes/imageUrl (default "image/png"). */

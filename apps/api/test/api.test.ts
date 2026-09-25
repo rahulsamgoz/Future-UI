@@ -435,7 +435,7 @@ describe("ui-intelligence api", () => {
           branches: ["main"],
           windowStart: "2026-01-01T00:00:00.000Z",
           windowEnd: "2026-02-01T00:00:00.000Z",
-          scenarioIds: ["catalog-desktop-signed-in"],
+          scenarioIds: ["catalog-default-desktop"],
           maxBuilds: 5,
           renderBudgetMs: 60000,
           timezone: "UTC",

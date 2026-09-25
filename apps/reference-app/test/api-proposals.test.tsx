@@ -205,4 +205,47 @@ describe("editor proposal API integration", () => {
     expect(candidate.textContent).toContain("offline · local");
     expect(screen.getByTestId("editor-status").textContent).toContain("API proposals unavailable");
   });
+
+  it("renders a degraded-note warning when the API proposal carries a degraded note (closure-2 GAP B)", async () => {
+    const { withServices } = editorJourney();
+    let pollCount = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/.ui-intelligence/manifest.json")) {
+        return jsonResponse(200, { buildId: "build_test_1" });
+      }
+      if (url.includes("/v1/projects/reference-app/proposals") && method === "POST") {
+        return jsonResponse(202, { proposalId: "prop_degraded_1", jobId: "job_d1" });
+      }
+      if (url.includes("/v1/projects/reference-app/proposals/prop_degraded_1")) {
+        pollCount += 1;
+        if (pollCount === 1) return jsonResponse(200, { proposalId: "prop_degraded_1", status: "generating", candidates: [] });
+        return jsonResponse(200, {
+          proposalId: "prop_degraded_1",
+          status: "ready",
+          candidates: [API_CANDIDATE],
+          failure: null,
+          degraded: "1 image reference(s) ignored: provider not vision-capable",
+          acceptedCandidateId: null,
+        });
+      }
+      return jsonResponse(404, { error: "unexpected url" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(withServices(<App />));
+    await user.click(await screen.findByTestId("editor-open", undefined, { timeout: 4000 }));
+    await user.click(screen.getByTestId("select-mode"));
+    await user.click((await screen.findAllByText("Aurora Lamp"))[0]);
+    await waitFor(() => expect(screen.getByTestId("generate")).toBeTruthy());
+
+    await user.type(screen.getByTestId("instruction-input"), "use image");
+    await user.click(screen.getByTestId("generate"));
+
+    await waitFor(() => expect(screen.getAllByTestId("candidate").length).toBe(1), { timeout: 8000 });
+    // The degraded note renders alongside the candidates.
+    expect(screen.getByTestId("degraded-note").textContent).toContain("image reference(s) ignored");
+  });
 });

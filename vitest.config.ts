@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const pkgs = [
   "protocol",
+  "storage",
   "runtime-core",
   "preferences",
   "react",
