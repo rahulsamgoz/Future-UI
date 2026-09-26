@@ -126,7 +126,9 @@ describe("commit selection scoring", () => {
   });
 
   it("estimates captures with a ±30% uncertainty range", () => {
-    const estimate = estimateCaptures(13, 6, 2);
+    // 13 builds x 12 viewport-specific recipes = 156 (closure-3 audit P3:
+    // recipe ids already carry the viewport — no separate multiplier).
+    const estimate = estimateCaptures(13, 12);
     expect(estimate.estimatedCaptures).toBe(156);
     expect(estimate.uncertaintyRange).toEqual([109, 203]);
   });

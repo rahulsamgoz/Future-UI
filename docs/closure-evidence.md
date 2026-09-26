@@ -343,3 +343,16 @@ The PR #6 closure verification confirmed four of six closure areas and left two 
 **Guards:** the React/Vite E2E is gated by the shared fail-loud `browserGate` (Chromium) plus `UI_INTEL_SKIP_NETWORK_TESTS=1` for constrained environments (npm install needs the network or a warm npm cache).
 
 **Post-closure-2 verification:** `npx vitest run` → 439 passed / 9 skipped / 0 failed; `npx tsc -b` clean. Merge-commit CI run id is recorded in the PR Testing section after merge.
+
+---
+
+# Closure-3 — residual defects from the PR #7/#8 closure verification (2026-09-26, branch `vorflux/closure-3`)
+
+The PR #7/#8 closure verification confirmed all four closure-2 functional gaps and left two residual defects. Both were reproduced first, then fixed, then pinned with focused regressions.
+
+| Gap | Reproduction | Fix | Test command | Result |
+|-----|--------------|-----|--------------|--------|
+| **P2** — manifest-validation failure leaks a worktree | Audit repro confirmed: repo with `ui-intel.history.json` `{"buildAdapter":{"timeoutMs":"not-a-number"}}` → `reconstructCommit` threw the validation error but `git worktree list --porcelain` kept one extra reconstruction worktree and its directory, because `readHistoryManifest()` ran after `materializeCommit()` but before any cleanup-protected block | `reconstructCommit` now starts ONE unconditional cleanup scope immediately after `materializeCommit()`; manifest parsing/validation, environment initialization, build/serve, capture, and publication all run inside `reconstructMaterialized()` within that scope. The server is closed only when it was created; a `server.close()` rejection propagates but cannot skip worktree cleanup (outer `finally`) | `npx vitest run packages/capture/test/build-adapter.test.ts` | 7 passed — the new regression asserts BOTH filesystem removal (no new `ui-intel-reconstruct-*` temp roots) and git worktree deregistration (`worktree list --porcelain` unchanged) after invalid-manifest rejection |
+| **P3** — capture estimates count each viewport twice | `apps/api/src/planner.ts` computed `builds × uniqueScenarioIds × VIEWPORTS_PER_SCENARIO(2)`, but scenario ids are already viewport-specific (`catalog-default-desktop` vs `-mobile`); the CLI preview duplicated the same multiplier | Planner: `estimatedCaptures = builds × uniqueScenarioIds.length` (one capture per selected recipe per commit); `VIEWPORTS_PER_SCENARIO` removed. CLI `estimateCaptures(selectedBuilds, scenarioCount)` drops the viewport parameter; uncertainty range unchanged (±30%) | `npx vitest run apps/api/test/history-plan-fixture.test.ts packages/cli/test/cli.test.ts` | 5 + suite passed — regressions pin: one selected recipe → 1 per commit; both viewport-specific recipes → 2; duplicate ids deduped → 1; default complete set → 12 per commit; unknown-id 422 rejection preserved |
+
+**Post-closure-3 verification:** `npx vitest run` → 448 passed / 9 skipped / 0 failed (60 files passed, 2 skipped); `npx tsc -b` clean. Merge-commit CI run id is recorded in the PR Testing section after merge.

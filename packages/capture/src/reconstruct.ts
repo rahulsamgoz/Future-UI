@@ -607,8 +607,9 @@ export async function findPublishedCapture(args: {
 /**
  * Reconstruct one commit and capture its declared scenarios:
  * 1. materialize the commit (git worktree) into a temp dir;
- * 2. serve the static tree on an ephemeral port (serving IS the build for the
- *    fixture corpus — real apps would run their build here);
+ * 2. serve it on an ephemeral port — static trees are served directly, and a
+ *    repo carrying a ui-intel.history.json manifest is built first via the
+ *    constrained build adapter (install + build, then serve the outDir);
  * 3. run every scenario recipe, upload via CaptureUploader, and VERIFY
  *    publication (capture retrievable, occurrences > 0, artifact bytes
  *    readable) before counting the scenario as captured. A capture already
@@ -627,6 +628,31 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
   const recipes = resolveScenarios(args.scenarios);
   const redactionPolicy: RedactionPolicy = args.redactionPolicy ?? { version: "1", masks: [] };
   const materialized = materializeCommit(repoDir, args.commitSha);
+  // ONE unconditional cleanup scope for everything after materialization
+  // (closure-3 audit P2): manifest parsing/validation, environment
+  // initialization, build/serve setup, capture, and publication all happen
+  // inside reconstructMaterialized. Whatever throws there — including a
+  // server-close failure — lands in this finally, so the worktree and its
+  // temp root are always removed and deregistered.
+  try {
+    return await reconstructMaterialized(args, { log, marker, recipes, redactionPolicy }, materialized);
+  } finally {
+    materialized.cleanup();
+  }
+}
+
+/** The part of reconstructCommit that runs inside the materialized worktree's cleanup scope. */
+async function reconstructMaterialized(
+  args: ReconstructCommitArgs,
+  ctx: {
+    log: (message: string) => void;
+    marker: string;
+    recipes: ScenarioRecipe[];
+    redactionPolicy: RedactionPolicy;
+  },
+  materialized: { dir: string; cleanup: () => void },
+): Promise<CommitReconstruction> {
+  const { log, marker, recipes, redactionPolicy } = ctx;
   const manifest = readHistoryManifest(materialized.dir);
   const adapterVersion = manifest?.buildAdapter ? "build-adapter" : "static-fixture";
   const environment: CaptureEnvironment = args.environment ?? {
@@ -638,23 +664,18 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
     redactionPolicyDigest: await digestOf(redactionPolicy),
   };
 
+  // The server is closed only because it was created here; if setup throws
+  // before assignment, no close is attempted and the caller's cleanup scope
+  // still removes the worktree.
   let server: { baseUrl: string; close: () => Promise<void> };
   let buildOutDir: string | undefined;
-  try {
-    if (manifest?.buildAdapter) {
-      log(`reconstruct ${args.commitSha}: build adapter detected in ui-intel.history.json`);
-      const built = await buildAndServe(materialized.dir, manifest);
-      server = built;
-      buildOutDir = built.buildOutDir;
-    } else {
-      server = await serveStatic(materialized.dir);
-    }
-  } catch (error) {
-    // Setup (install/build/serve) failed before the main try below: the
-    // worktree + temp root must still be cleaned up (closure-2 review —
-    // previously a build failure here leaked the materialized worktree).
-    materialized.cleanup();
-    throw error;
+  if (manifest?.buildAdapter) {
+    log(`reconstruct ${args.commitSha}: build adapter detected in ui-intel.history.json`);
+    const built = await buildAndServe(materialized.dir, manifest);
+    server = built;
+    buildOutDir = built.buildOutDir;
+  } else {
+    server = await serveStatic(materialized.dir);
   }
   try {
     const servedDir = buildOutDir ?? materialized.dir;
@@ -744,14 +765,10 @@ export async function reconstructCommit(args: ReconstructCommitArgs): Promise<Co
     }
     return { commitSha: args.commitSha, buildArtifactDigest, intentionallyUnbuildable, scenarios: results };
   } finally {
-    // Nested finally (closure review): a rejecting server.close() must not
-    // skip materialized.cleanup() — that would leak the git worktree and its
-    // temp directory on every failed reconstruction.
-    try {
-      await server.close();
-    } finally {
-      materialized.cleanup();
-    }
+    // A rejecting server.close() propagates but cannot skip the caller's
+    // outer cleanup scope, which removes the worktree unconditionally
+    // (closure-3 audit P2).
+    await server.close();
   }
 }
 

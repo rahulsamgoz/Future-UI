@@ -13,7 +13,6 @@ import type { Db } from "./db.js";
 import { nowIso } from "./db.js";
 import { insertHistoryPlan } from "./store.js";
 
-export const VIEWPORTS_PER_SCENARIO = 2;
 export const ESTIMATE_UNCERTAINTY = 0.3;
 
 /**
@@ -129,7 +128,10 @@ export function planHistory(db: Db, projectId: string, input: HistoryPlanInput):
   const uniqueScenarioIds = [...new Set(resolvedScenarioIds)];
 
   const builds = selectedCommits.length;
-  const estimatedCaptures = builds * uniqueScenarioIds.length * VIEWPORTS_PER_SCENARIO;
+  // One capture per (commit, selected recipe): scenario ids are already
+  // viewport-specific (catalog-default-desktop vs -mobile), so no per-viewport
+  // multiplier (closure-3 audit P3 — the old ×2 double-counted every recipe).
+  const estimatedCaptures = builds * uniqueScenarioIds.length;
   const normalizedInput: HistoryPlanInput = {
     ...input,
     scenarioIds: uniqueScenarioIds,
