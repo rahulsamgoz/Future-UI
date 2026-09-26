@@ -106,7 +106,8 @@ describe("history plan fixtureRepo end to end (audit finding 3a)", () => {
     expect(all.statusCode).toBe(201);
     const allBody = JSON.parse(all.body);
     expect(allBody.input.scenarioIds.length).toBe(12);
-    expect(allBody.estimatedCaptures).toBe(allBody.selectedCommits.length * 12 * 2);
+    // One capture per (commit, recipe) — ids are viewport-specific (closure-3 audit P3).
+    expect(allBody.estimatedCaptures).toBe(allBody.selectedCommits.length * 12);
 
     // Explicit subset is accepted and estimated correctly.
     const subset = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
@@ -115,7 +116,49 @@ describe("history plan fixtureRepo end to end (audit finding 3a)", () => {
     expect(subset.statusCode).toBe(201);
     const subsetBody = JSON.parse(subset.body);
     expect(subsetBody.input.scenarioIds).toEqual(["catalog-default-desktop", "account-default-desktop"]);
-    expect(subsetBody.estimatedCaptures).toBe(subsetBody.selectedCommits.length * 2 * 2);
+    expect(subsetBody.estimatedCaptures).toBe(subsetBody.selectedCommits.length * 2);
+  });
+
+  it("estimates count each selected viewport-specific recipe once per commit (closure-3 audit P3)", async () => {
+    // Register the fixture commits so the plan actually selects one.
+    const log = execFileSync("git", ["-C", corpusDir, "log", "--reverse", "--format=%H %cI"], {
+      encoding: "utf8",
+    }).trim();
+    const commits = log.split("\n").map((line) => {
+      const [sha, committedAt] = line.split(" ");
+      return { sha: sha as string, committedAt: committedAt as string, parents: [] as string[] };
+    });
+    const sync = await post(app, `/v1/projects/${PROJECT}/commits:sync`, { commits });
+    expect(sync.statusCode).toBe(200);
+
+    // One selected recipe: exactly one capture per commit (not two — the old
+    // code multiplied by a phantom per-scenario viewport count).
+    const single = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
+      input: input({ scenarioIds: ["catalog-default-desktop"], maxBuilds: 1 }),
+    });
+    expect(single.statusCode).toBe(201);
+    const singleBody = JSON.parse(single.body);
+    expect(singleBody.estimatedCaptures).toBe(1);
+    expect(singleBody.uncertaintyRange).toEqual([
+      Math.round(1 * 0.7),
+      Math.round(1 * 1.3),
+    ]);
+
+    // Both viewport-specific recipes of the same scenario: counted separately.
+    const bothViewports = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
+      input: input({ scenarioIds: ["catalog-default-desktop", "catalog-default-mobile"], maxBuilds: 1 }),
+    });
+    expect(bothViewports.statusCode).toBe(201);
+    expect(JSON.parse(bothViewports.body).estimatedCaptures).toBe(2);
+
+    // Duplicate ids are deduplicated and counted once.
+    const duplicates = await post(app, `/v1/projects/${PROJECT}/history-plans`, {
+      input: input({ scenarioIds: ["catalog-default-desktop", "catalog-default-desktop"], maxBuilds: 1 }),
+    });
+    expect(duplicates.statusCode).toBe(201);
+    const dupBody = JSON.parse(duplicates.body);
+    expect(dupBody.input.scenarioIds).toEqual(["catalog-default-desktop"]);
+    expect(dupBody.estimatedCaptures).toBe(1);
   });
 
   browserIt("reconstructs the selected commit through the real worker path (captures carry that commit sha)", { timeout: 300_000 }, async () => {

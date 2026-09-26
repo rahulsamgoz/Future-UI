@@ -88,6 +88,29 @@ describe("build adapter safety", () => {
     expect(leaked).toEqual([]);
   });
 
+  it("invalid-manifest rejection cleans up the temp dir AND the git worktree registration (closure-3 audit P2)", async () => {
+    const before = reconstructTempRoots();
+    const { repoDir, commitSha } = makeRepo({
+      "index.html": "<html><body>hi</body></html>",
+      // Exact audit reproduction: validation throws BEFORE any build/serve.
+      "ui-intel.history.json": JSON.stringify({ buildAdapter: { timeoutMs: "not-a-number" } }),
+    });
+    const worktreesBefore = execFileSync("git", ["-C", repoDir, "worktree", "list", "--porcelain"], {
+      encoding: "utf8",
+    });
+
+    await expect(
+      reconstructCommit({ repoDir, commitSha, scenarios: ["catalog-default-desktop"], api: FAKE_API }),
+    ).rejects.toThrow(/buildAdapter\.timeoutMs must be a positive finite number/);
+
+    const leaked = [...reconstructTempRoots()].filter((name) => !before.has(name));
+    expect(leaked).toEqual([]);
+    const worktreesAfter = execFileSync("git", ["-C", repoDir, "worktree", "list", "--porcelain"], {
+      encoding: "utf8",
+    });
+    expect(worktreesAfter).toBe(worktreesBefore);
+  });
+
   it("cleans up the worktree when the build command fails", async () => {
     const before = reconstructTempRoots();
     const { repoDir, commitSha } = makeRepo({

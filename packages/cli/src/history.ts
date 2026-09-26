@@ -28,7 +28,7 @@ export type HistoryPlanArgs = {
 };
 
 export type HistoryPlanEstimate = {
-  /** Planned capture slots: selectedBuilds x scenarios x viewports. */
+  /** Planned capture slots: selectedBuilds x selected recipes (recipe ids are already viewport-specific). */
   estimatedCaptures: number;
   /** Plus/minus 30 percent uncertainty range around the estimate. */
   uncertaintyRange: [number, number];
@@ -44,8 +44,10 @@ export type LocalHistoryPlan = {
   createdAt: string;
 };
 
-export function estimateCaptures(selectedBuilds: number, scenarioCount: number, viewportCount: number): HistoryPlanEstimate {
-  const estimatedCaptures = selectedBuilds * scenarioCount * viewportCount;
+export function estimateCaptures(selectedBuilds: number, scenarioCount: number): HistoryPlanEstimate {
+  // Scenario ids are viewport-specific, so each selected recipe is one capture
+  // per commit (closure-3 audit P3 — the old viewport multiplier double-counted).
+  const estimatedCaptures = selectedBuilds * scenarioCount;
   return {
     estimatedCaptures,
     uncertaintyRange: [
@@ -87,8 +89,10 @@ export async function buildHistoryPlan(args: HistoryPlanArgs): Promise<LocalHist
     signals: collectCommitSignals(args.repoDir, commit.sha),
   }));
   const selected = selectCandidateCommits(scored, args.maxBuilds);
-  const scenarioIds = args.scenarioIds.length > 0 ? args.scenarioIds : resolveScenarioIds("all");
-  const { estimatedCaptures, uncertaintyRange } = estimateCaptures(selected.length, scenarioIds.length, 2);
+  // Deduplicate (order-preserving) so the local estimate matches the
+  // server-side planner, which dedupes before estimating (closure-3 review).
+  const scenarioIds = [...new Set(args.scenarioIds.length > 0 ? args.scenarioIds : resolveScenarioIds("all"))];
+  const { estimatedCaptures, uncertaintyRange } = estimateCaptures(selected.length, scenarioIds.length);
   return {
     input: {
       repository: args.repository,
