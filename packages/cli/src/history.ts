@@ -89,7 +89,9 @@ export async function buildHistoryPlan(args: HistoryPlanArgs): Promise<LocalHist
     signals: collectCommitSignals(args.repoDir, commit.sha),
   }));
   const selected = selectCandidateCommits(scored, args.maxBuilds);
-  const scenarioIds = args.scenarioIds.length > 0 ? args.scenarioIds : resolveScenarioIds("all");
+  // Deduplicate (order-preserving) so the local estimate matches the
+  // server-side planner, which dedupes before estimating (closure-3 review).
+  const scenarioIds = [...new Set(args.scenarioIds.length > 0 ? args.scenarioIds : resolveScenarioIds("all"))];
   const { estimatedCaptures, uncertaintyRange } = estimateCaptures(selected.length, scenarioIds.length);
   return {
     input: {
